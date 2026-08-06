@@ -9,8 +9,9 @@ proofs that move money in a public issue.
 - `.env`, PEM files and `secrets/*` are ignored by Git and excluded from Docker build context.
 - The image contains no key, provider Project ID, PostgreSQL password or deployment credential.
 - Local Compose mounts the evaluator-provided key at `/run/secrets/starkbank_private_key`.
-- A one-shot, network-isolated local initializer copies that mounted key into an ephemeral Docker
-  volume as UID `10001` with mode `0400`; `make down` removes the copied runtime key.
+- A one-shot, network-isolated and capability-free local initializer copies that mounted key into
+  an ephemeral read-only runtime volume; `make down` removes the copied runtime key. Unix mode is
+  not the security boundary inside this single-purpose volume; Docker volume access is.
 - VPS secrets are stored in the protected GitHub `production` Environment and are available only
   to its manually approved deployment job.
 - The workflow sends Project ID, key and database password through SSH standard input. The VPS

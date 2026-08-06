@@ -26,7 +26,7 @@ services:
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - >-
-        install -m 0400 -o 10001 -g 10001
+        install -m 0444
         /run/secrets/starkbank_private_key_source
         /prepared/starkbank_private_key
     secrets:
@@ -40,9 +40,6 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    cap_add:
-      - CHOWN
-      - FOWNER
     pids_limit: 32
     restart: "no"
 

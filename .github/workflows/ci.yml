@@ -118,7 +118,7 @@ jobs:
         run: |
           docker compose --env-file .env -f compose.yaml -p starkbank-trial-local ps
           docker compose --env-file .env -f compose.yaml -p starkbank-trial-local \
-            logs --no-color --tail=200 api worker scheduler migrate
+            logs --no-color --tail=200 key-init api worker scheduler migrate
       - if: always()
         run: make down
 
