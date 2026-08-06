@@ -73,9 +73,10 @@ and fake provider boundaries. They do not load `.env`, mount a private key or ca
 
 Application JSONL logs persist in the `starkbank-trial-local_app_logs` volume. Container stdout
 also uses structured JSON. `make logs-webhook` follows persisted webhook records specifically.
-The source PEM remains mode `0600`; a capability-free one-shot container prepares a readable copy
-inside an ephemeral volume mounted read-only by application containers. `make down` removes that
-copy while preserving database and log volumes.
+The source PEM remains mode `0600`; a network-isolated one-shot container prepares a readable copy
+inside an ephemeral volume mounted read-only by application containers. The initializer drops all
+Linux capabilities except `DAC_OVERRIDE`, needed when the host file owner differs from container
+root. `make down` removes the copy while preserving database and log volumes.
 
 ## Quick Tunnel
 
