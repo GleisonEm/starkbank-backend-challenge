@@ -27,7 +27,9 @@ esac
 [ "$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)" = "$requested_revision" ] || \
     fail "checked-out VPS source does not match requested revision"
 
-docker pull "$requested_image" >/dev/null
+if ! docker image inspect "$requested_image" >/dev/null 2>&1; then
+    docker pull "$requested_image" >/dev/null
+fi
 image_revision=$(docker image inspect \
     --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
     "$requested_image")

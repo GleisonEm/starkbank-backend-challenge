@@ -31,7 +31,8 @@ sudo make vps-release \
 ```
 
 The release flow validates the digest and persistent runtime secret files, saves the old image,
-pulls, runs migrations, starts services and checks both internal and public readiness. Pull,
+runs migrations, starts services and checks both internal and public readiness. It pulls a missing
+image, while the GitHub workflow preloads private GHCR images with ephemeral authentication. Pull,
 startup or health failure restores the previous `APP_IMAGE` and attempts to bring it back up.
 
 The `deploy-vps` GitHub workflow performs this command over SSH only after manual approval of the
@@ -54,9 +55,11 @@ Configure these non-secret Environment variables separately:
 - `VPS_USER`
 
 The workflow also requires the full source SHA printed by CI. It checks out that exact commit on
-the VPS and verifies the image's `org.opencontainers.image.revision` label before installing
-secrets or releasing. Secret values are streamed through SSH standard input and never included in
-command arguments, the image or the workflow summary.
+the VPS, streams the workflow's short-lived `GITHUB_TOKEN` to a one-shot private-image pull, and
+verifies the image's `org.opencontainers.image.revision` label before installing secrets or
+releasing. The registry configuration is removed before the pull command exits. Application
+secret values are streamed through SSH standard input and never included in command arguments,
+the image or the workflow summary.
 
 To rotate the Stark Bank key or Project ID, update it in the `production` Environment and run an
 approved deployment again. The installer validates the complete set before replacing root-only

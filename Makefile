@@ -10,7 +10,7 @@ VPS_COMPOSE = docker compose --env-file /etc/starkbank-trial/vps.env -f compose.
 	test check tunnel tunnel-url tunnel-down sandbox-check webhook-setup webhook-list \
 	smoke-invoice trial-start trial-status reset vps-config-check vps-secrets vps-pull \
 	vps-deploy vps-up vps-down vps-health vps-status vps-trial-status vps-logs \
-	vps-release vps-verify-image vps-backup vps-restore vps-rollback
+	vps-auth-pull vps-release vps-verify-image vps-backup vps-restore vps-rollback
 
 help:
 	@printf '%s\n' \
@@ -20,7 +20,7 @@ help:
 		'Sandbox: sandbox-check webhook-setup webhook-list smoke-invoice trial-start trial-status' \
 		'VPS: vps-config-check vps-secrets vps-pull vps-deploy vps-up vps-down vps-health' \
 		'     vps-status vps-trial-status vps-logs vps-release vps-verify-image' \
-		'     vps-backup vps-restore vps-rollback'
+		'     vps-auth-pull vps-backup vps-restore vps-rollback'
 
 env-init:
 	@test ! -e .env || { printf '.env already exists; refusing to overwrite it.\n' >&2; exit 1; }
@@ -115,6 +115,11 @@ vps-secrets: vps-config-check
 
 vps-pull: vps-secrets
 	$(VPS_COMPOSE) pull
+
+vps-auth-pull:
+	@test -n "$(RELEASE_IMAGE)" || { printf 'Pass RELEASE_IMAGE=ghcr.io/...@sha256:...\n' >&2; exit 1; }
+	@test -n "$(GHCR_USER)" || { printf 'Pass GHCR_USER=<github-user>.\n' >&2; exit 1; }
+	./infra/vps/pull-private-image.sh "$(RELEASE_IMAGE)" "$(GHCR_USER)"
 
 vps-deploy:
 	./infra/vps/release.sh

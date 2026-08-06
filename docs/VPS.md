@@ -107,7 +107,10 @@ database password before writing a versioned directory under `/etc/starkbank-tri
 directory mode `0700`. The environment and PostgreSQL password use root-owned mode `0600`; the
 private key uses mode `0400` and container UID/GID `10001`, which is readable only through the
 Docker bind mount because the host parent directories remain root-only. An atomic `current`
-symlink switches all three values together. No GitHub credential is stored on the VPS.
+symlink switches all three values together. The workflow's short-lived `GITHUB_TOKEN` is also
+streamed over SSH standard input to authenticate one immutable GHCR pull. Docker uses a temporary
+configuration under `/run`, logs out and removes that directory before the command exits. No
+GitHub credential is stored on the VPS.
 
 ```bash
 sudo make vps-config-check
@@ -120,9 +123,10 @@ GitHub deployment has installed the secrets. Do not print or open those files du
 
 ## 5. Deploy
 
-The GHCR package must be public so the VPS can pull it without storing a registry credential.
-The CI summary prints both the immutable image reference and its full source commit after all gates
-pass. Start `deploy-vps`, provide those two values and approve the `production` Environment.
+The GHCR package may remain private. The approved workflow receives a repository-scoped
+`GITHUB_TOKEN` with read-only package permission, uses it for one pull and never persists it on the
+VPS. The CI summary prints both the immutable image reference and its full source commit after all
+gates pass. Start `deploy-vps`, provide those two values and approve the `production` Environment.
 
 ```bash
 sudo make vps-pull

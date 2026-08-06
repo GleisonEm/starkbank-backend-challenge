@@ -44,7 +44,7 @@ rollback() {
 
 "$SCRIPT_DIR/config-check.sh" >/dev/null
 "$SCRIPT_DIR/validate-secrets.sh" >/dev/null
-if ! compose pull; then
+if ! docker image inspect "$requested_image" >/dev/null 2>&1 && ! compose pull; then
     rollback
     fail "image pull failed; previous APP_IMAGE was restored"
 fi
