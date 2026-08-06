@@ -1,0 +1,9 @@
+[Unit]
+Description=Back up the Stark Bank trial PostgreSQL database
+Requires=docker.service
+After=docker.service starkbank-trial.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/starkbank-trial
+ExecStart=/usr/bin/make vps-backup

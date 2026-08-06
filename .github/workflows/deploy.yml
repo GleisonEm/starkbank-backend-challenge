@@ -1,0 +1,132 @@
+name: deploy-vps
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_digest:
+        description: Published image digest, including sha256 prefix
+        required: true
+        type: string
+      source_sha:
+        description: Full 40-character source commit published in the image
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: starkbank-trial-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ vars.PUBLIC_BASE_URL }}
+    steps:
+      - name: Validate deployment configuration
+        env:
+          GHCR_IMAGE: ${{ vars.GHCR_IMAGE }}
+          PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+          VPS_HOST: ${{ vars.VPS_HOST }}
+          VPS_KNOWN_HOSTS: ${{ vars.VPS_KNOWN_HOSTS }}
+          VPS_USER: ${{ vars.VPS_USER }}
+        run: |
+          test "$GHCR_IMAGE" = "ghcr.io/gleisonem/starkbank-backend-challenge"
+          case "$PUBLIC_BASE_URL" in https://*) ;; *) exit 1 ;; esac
+          test -n "$VPS_HOST"
+          test -n "$VPS_KNOWN_HOSTS"
+          test -n "$VPS_USER"
+      - name: Validate immutable release inputs
+        env:
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          test "${#IMAGE_DIGEST}" -eq 71
+          digest=${IMAGE_DIGEST#sha256:}
+          test "$digest" != "$IMAGE_DIGEST"
+          case "$digest" in
+            *[!0-9a-f]*) printf 'Invalid sha256 digest.\n' >&2; exit 1 ;;
+          esac
+          test "${#SOURCE_SHA}" -eq 40
+          case "$SOURCE_SHA" in
+            *[!0-9a-f]*) printf 'Invalid source commit.\n' >&2; exit 1 ;;
+          esac
+      - name: Configure SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ vars.VPS_KNOWN_HOSTS }}
+        run: |
+          install -d -m 0700 "$RUNNER_TEMP/starkbank-ssh"
+          printf '%s\n' "$VPS_SSH_KEY" > "$RUNNER_TEMP/starkbank-ssh/id_ed25519"
+          printf '%s\n' "$VPS_KNOWN_HOSTS" > "$RUNNER_TEMP/starkbank-ssh/known_hosts"
+          chmod 0600 "$RUNNER_TEMP/starkbank-ssh/id_ed25519" \
+            "$RUNNER_TEMP/starkbank-ssh/known_hosts"
+      - name: Synchronize immutable VPS source
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          VPS_HOST: ${{ vars.VPS_HOST }}
+          VPS_USER: ${{ vars.VPS_USER }}
+        run: |
+          remote_command="sudo git -C /opt/starkbank-trial fetch --prune origin main"
+          remote_command="$remote_command && sudo git -C /opt/starkbank-trial cat-file -e $SOURCE_SHA^{commit}"
+          remote_command="$remote_command && sudo git -C /opt/starkbank-trial merge-base --is-ancestor $SOURCE_SHA FETCH_HEAD"
+          remote_command="$remote_command && sudo git -C /opt/starkbank-trial checkout --detach $SOURCE_SHA"
+          ssh -o BatchMode=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/starkbank-ssh/known_hosts" \
+            -i "$RUNNER_TEMP/starkbank-ssh/id_ed25519" \
+            "$VPS_USER@$VPS_HOST" "$remote_command"
+      - name: Verify image provenance
+        env:
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          GHCR_IMAGE: ${{ vars.GHCR_IMAGE }}
+          VPS_HOST: ${{ vars.VPS_HOST }}
+          VPS_USER: ${{ vars.VPS_USER }}
+        run: |
+          image="$GHCR_IMAGE@$IMAGE_DIGEST"
+          remote_command="sudo make -C /opt/starkbank-trial vps-verify-image RELEASE_IMAGE=$image RELEASE_SOURCE_SHA=$SOURCE_SHA"
+          ssh -o BatchMode=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/starkbank-ssh/known_hosts" \
+            -i "$RUNNER_TEMP/starkbank-ssh/id_ed25519" \
+            "$VPS_USER@$VPS_HOST" "$remote_command"
+      - name: Install runtime secrets
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          STARKBANK_PRIVATE_KEY_PEM: ${{ secrets.STARKBANK_PRIVATE_KEY_PEM }}
+          STARKBANK_PROJECT_ID: ${{ secrets.STARKBANK_PROJECT_ID }}
+          VPS_HOST: ${{ vars.VPS_HOST }}
+          VPS_USER: ${{ vars.VPS_USER }}
+        run: |
+          secret_dir=$(mktemp -d "$RUNNER_TEMP/starkbank-secrets.XXXXXX")
+          trap 'rm -rf "$secret_dir"' EXIT HUP INT TERM
+          umask 077
+          printf '%s' "$STARKBANK_PROJECT_ID" > "$secret_dir/project-id"
+          printf '%s\n' "$STARKBANK_PRIVATE_KEY_PEM" > "$secret_dir/private-key.pem"
+          printf '%s' "$POSTGRES_PASSWORD" > "$secret_dir/postgres-password"
+          tar --create --file=- --directory="$secret_dir" \
+            project-id private-key.pem postgres-password | \
+            ssh -o BatchMode=yes \
+              -o UserKnownHostsFile="$RUNNER_TEMP/starkbank-ssh/known_hosts" \
+              -i "$RUNNER_TEMP/starkbank-ssh/id_ed25519" \
+              "$VPS_USER@$VPS_HOST" \
+              'sudo /opt/starkbank-trial/infra/vps/install-secrets.sh'
+      - name: Release through SSH
+        env:
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          GHCR_IMAGE: ${{ vars.GHCR_IMAGE }}
+          PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+          VPS_HOST: ${{ vars.VPS_HOST }}
+          VPS_USER: ${{ vars.VPS_USER }}
+        run: |
+          image="$GHCR_IMAGE@$IMAGE_DIGEST"
+          remote_command="sudo make -C /opt/starkbank-trial vps-release RELEASE_IMAGE=$image"
+          ssh -o BatchMode=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/starkbank-ssh/known_hosts" \
+            -i "$RUNNER_TEMP/starkbank-ssh/id_ed25519" \
+            "$VPS_USER@$VPS_HOST" "$remote_command"
+          printf "Released \`%s\` from \`%s\` to %s.\n" \
+            "$image" "$SOURCE_SHA" "$PUBLIC_BASE_URL" >> "$GITHUB_STEP_SUMMARY"

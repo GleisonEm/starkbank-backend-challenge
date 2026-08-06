@@ -1,0 +1,99 @@
+x-app: &app
+  image: starkbank-trial:local
+  build:
+    context: .
+    target: runtime
+  env_file:
+    - path: .env
+      required: true
+  environment:
+    DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB}
+    STARKBANK_ENVIRONMENT: sandbox
+    STARKBANK_PRIVATE_KEY_FILE: /run/secrets/starkbank_private_key
+    LOG_FILE: /app/logs/starkbank-trial.jsonl
+  secrets:
+    - starkbank_private_key
+  volumes:
+    - app_logs:/app/logs
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:17.6-bookworm@sha256:f3bd19c606e442c3d7bdfa8002e03fe260a1023351e0ea4598032022b68dd6e3
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  migrate:
+    <<: *app
+    command: ["starkbank-trial", "db", "upgrade"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    <<: *app
+    command:
+      - gunicorn
+      - --bind=0.0.0.0:8000
+      - --workers=2
+      - --threads=4
+      - --timeout=30
+      - starkbank_trial.http:create_app()
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=2)
+      interval: 5s
+      timeout: 3s
+      retries: 24
+    ports:
+      - "127.0.0.1:${API_PORT:-8787}:8000"
+
+  worker:
+    <<: *app
+    command: ["starkbank-trial", "worker", "run"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  scheduler:
+    <<: *app
+    command: ["supercronic", "/app/infra/supercronic/crontab"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  cloudflared-quick:
+    image: cloudflare/cloudflared:2026.3.0@sha256:6b599ca3e974349ead3286d178da61d291961182ec3fe9c505e1dd02c8ac31b0
+    command: ["tunnel", "--no-autoupdate", "--url", "http://api:8000"]
+    depends_on:
+      api:
+        condition: service_healthy
+    profiles: ["tunnel"]
+    restart: unless-stopped
+
+secrets:
+  starkbank_private_key:
+    file: ${LOCAL_STARKBANK_PRIVATE_KEY_FILE:?set LOCAL_STARKBANK_PRIVATE_KEY_FILE}
+
+volumes:
+  app_logs:
+  postgres_data:

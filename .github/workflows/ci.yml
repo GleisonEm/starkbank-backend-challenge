@@ -1,0 +1,139 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.6-bookworm@sha256:f3bd19c606e442c3d7bdfa8002e03fe260a1023351e0ea4598032022b68dd6e3
+        env:
+          POSTGRES_DB: starkbank_trial_test
+          POSTGRES_PASSWORD: trial
+          POSTGRES_USER: trial
+        options: >-
+          --health-cmd "pg_isready -U trial -d starkbank_trial_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+        ports:
+          - 5432:5432
+    env:
+      DATABASE_URL: postgresql+psycopg://trial:trial@localhost:5432/starkbank_trial_test
+      TEST_DATABASE_URL: postgresql+psycopg://trial:trial@localhost:5432/starkbank_trial_test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          version: "0.11.6"
+          enable-cache: true
+          prune-cache: true
+      - run: uv sync --frozen
+      - run: uv lock --check
+      - run: uv run ruff format --check src tests migrations
+      - run: uv run ruff check src tests migrations
+      - run: uv run mypy src
+      - run: uv run basedpyright src tests
+      - run: uv run alembic upgrade head
+      - run: uv run pytest --cov=starkbank_trial --cov-report=term-missing
+      - run: uv build
+      - run: uv run pip-audit
+
+  compose-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Lint workflows, shell scripts and Dockerfile
+        run: |
+          docker run --rm --volume "$PWD:/repo:ro" --workdir /repo \
+            rhysd/actionlint:1.7.7@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9
+          docker run --rm --volume "$PWD:/mnt:ro" --workdir /mnt \
+            koalaman/shellcheck-alpine:v0.10.0@sha256:5921d946dac740cbeec2fb1c898747b6105e585130cc7f0602eec9a10f7ddb63 \
+            shellcheck -x infra/local/keygen.sh infra/local/tunnel-url.sh \
+            infra/local/validate-env.sh infra/vps/backup.sh infra/vps/config-check.sh \
+            infra/vps/health.sh infra/vps/install-secrets.sh infra/vps/install-systemd.sh \
+            infra/vps/release.sh infra/vps/restore.sh infra/vps/validate-secrets.sh \
+            infra/vps/verify-image.sh
+          docker run --rm --interactive \
+            hadolint/hadolint:v2.12.0-alpine@sha256:3c206a451cec6d486367e758645269fd7d696c5ccb6ff59d8b03b0e45268a199 \
+            < Dockerfile
+      - name: Validate local Compose contract
+        run: |
+          cp .env.example .env
+          sed -i 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=ci-local-password/' .env
+          sed -i 's/^STARKBANK_PROJECT_ID=.*/STARKBANK_PROJECT_ID=123456789/' .env
+          mkdir -p secrets
+          printf '%s\n' '-----BEGIN PRIVATE KEY-----' 'ci-placeholder' '-----END PRIVATE KEY-----' > secrets/private-key.pem
+          docker compose --env-file .env -f compose.yaml -p starkbank-trial-local config --quiet
+      - name: Validate VPS Compose and Caddy contracts
+        run: |
+          sed 's/replace-with-64-character-digest/0000000000000000000000000000000000000000000000000000000000000000/' \
+            infra/vps/vps.env.example > /tmp/starkbank-vps.env
+          sudo install -d -m 0750 -o root -g root /etc/starkbank-trial
+          sudo install -m 0644 -o root -g root /tmp/starkbank-vps.env \
+            /etc/starkbank-trial/vps.env
+          secret_input=$(mktemp -d)
+          trap 'rm -rf "$secret_input"' EXIT HUP INT TERM
+          printf '123456789' > "$secret_input/project-id"
+          printf 'ci-postgres-password-32-characters' > "$secret_input/postgres-password"
+          openssl ecparam -name secp256k1 -genkey -noout \
+            -out "$secret_input/private-key.pem"
+          tar --create --file=- --directory="$secret_input" \
+            project-id private-key.pem postgres-password | \
+            sudo ./infra/vps/install-secrets.sh
+          sudo ./infra/vps/validate-secrets.sh
+          docker compose --env-file /tmp/starkbank-vps.env -f compose.vps.yaml \
+            -p starkbank-trial-vps config --quiet
+          docker run --rm --env PUBLIC_HOST=trial.example.com \
+            --volume "$PWD/infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d \
+            caddy validate --config /etc/caddy/Caddyfile
+
+  local-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Prepare inert local configuration
+        run: |
+          cp .env.example .env
+          sed -i 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=ci-local-password/' .env
+          sed -i 's/^STARKBANK_PROJECT_ID=.*/STARKBANK_PROJECT_ID=123456789/' .env
+      - run: make build
+      - run: make keygen
+      - run: make up
+      - run: make health
+      - run: make ps
+      - if: always()
+        run: make down
+
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [quality, compose-contracts, local-smoke]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Build and publish immutable source tag
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          tag="sha-$GITHUB_SHA"
+          docker build --target runtime --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --tag "$image:$tag" .
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          push_output=$(docker push "$image:$tag")
+          printf '%s\n' "$push_output"
+          digest=$(printf '%s\n' "$push_output" | awk '/digest:/ {print $3}' | tail -n 1)
+          test -n "$digest"
+          printf "### Published image\n\n\`%s@%s\`\n\nSource: \`%s\`\n" \
+            "$image" "$digest" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"

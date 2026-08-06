@@ -1,0 +1,31 @@
+services:
+  postgres-test:
+    image: postgres:17.6-bookworm@sha256:f3bd19c606e442c3d7bdfa8002e03fe260a1023351e0ea4598032022b68dd6e3
+    environment:
+      POSTGRES_DB: starkbank_trial_test
+      POSTGRES_PASSWORD: trial-test
+      POSTGRES_USER: trial
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trial -d starkbank_trial_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  test:
+    image: starkbank-trial:test
+    build:
+      context: .
+      target: test
+    environment:
+      COVERAGE_FILE: /tmp/.coverage
+      DATABASE_URL: postgresql+psycopg://trial:trial-test@postgres-test:5432/starkbank_trial_test
+      MYPY_CACHE_DIR: /tmp/mypy-cache
+      RUFF_CACHE_DIR: /tmp/ruff-cache
+      TEST_DATABASE_URL: postgresql+psycopg://trial:trial-test@postgres-test:5432/starkbank_trial_test
+      XDG_CACHE_HOME: /tmp/cache
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+    command: ["pytest", "-p", "no:cacheprovider", "--cov=starkbank_trial", "--cov-report=term-missing"]
