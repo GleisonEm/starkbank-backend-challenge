@@ -1,4 +1,11 @@
 {$PUBLIC_HOST} {
+	tls {
+		issuer acme {
+			profile shortlived
+			disable_tlsalpn_challenge
+		}
+	}
+
 	encode zstd gzip
 	reverse_proxy api:8000
 

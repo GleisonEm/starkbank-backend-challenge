@@ -92,7 +92,7 @@ jobs:
           sudo ./infra/vps/validate-secrets.sh
           sudo docker compose --env-file /tmp/starkbank-vps.env -f compose.vps.yaml \
             -p starkbank-trial-vps config --quiet
-          docker run --rm --env PUBLIC_HOST=trial.example.com \
+          docker run --rm --env PUBLIC_HOST=159.223.160.99 \
             --volume "$PWD/infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
             caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d \
             caddy validate --config /etc/caddy/Caddyfile

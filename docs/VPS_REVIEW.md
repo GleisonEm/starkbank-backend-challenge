@@ -3,7 +3,7 @@
 Connect using your own SSH key:
 
 ```bash
-ssh reviewer@mac3.gemanuel.site
+ssh reviewer@159.223.160.99
 cd /opt/starkbank-trial
 ```
 

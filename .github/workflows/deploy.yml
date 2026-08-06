@@ -31,12 +31,14 @@ jobs:
         env:
           GHCR_IMAGE: ${{ vars.GHCR_IMAGE }}
           PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+          PUBLIC_HOST: ${{ vars.PUBLIC_HOST }}
           VPS_HOST: ${{ vars.VPS_HOST }}
           VPS_KNOWN_HOSTS: ${{ vars.VPS_KNOWN_HOSTS }}
           VPS_USER: ${{ vars.VPS_USER }}
         run: |
           test "$GHCR_IMAGE" = "ghcr.io/gleisonem/starkbank-backend-challenge"
-          case "$PUBLIC_BASE_URL" in https://*) ;; *) exit 1 ;; esac
+          test "$PUBLIC_HOST" = "159.223.160.99"
+          test "$PUBLIC_BASE_URL" = "https://$PUBLIC_HOST"
           test -n "$VPS_HOST"
           test -n "$VPS_KNOWN_HOSTS"
           test -n "$VPS_USER"

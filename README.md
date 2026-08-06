@@ -20,8 +20,8 @@ There are two independent environments. Neither reads configuration from the oth
 After the VPS is activated, its public checks are:
 
 ```bash
-curl --fail https://mac3.gemanuel.site/health/ready
-ssh reviewer@mac3.gemanuel.site
+curl --fail https://159.223.160.99/health/ready
+ssh reviewer@159.223.160.99
 sudo make -C /opt/starkbank-trial vps-status
 sudo make -C /opt/starkbank-trial vps-trial-status
 ```
@@ -29,6 +29,9 @@ sudo make -C /opt/starkbank-trial vps-trial-status
 The temporary SSH account is enabled only for the review window. See
 [`docs/VPS_REVIEW.md`](docs/VPS_REVIEW.md) for safe inspection commands and the explicit sudo
 security boundary.
+
+The production webhook endpoint is `https://159.223.160.99/webhooks/starkbank`. Caddy obtains a
+public short-lived certificate for that IPv4 address and renews it automatically.
 
 To run an independent local copy:
 

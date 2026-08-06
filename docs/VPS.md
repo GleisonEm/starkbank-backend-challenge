@@ -32,8 +32,8 @@ sudo ufw enable
 sudo ufw status verbose
 ```
 
-Point the `A` record for `mac3.gemanuel.site` directly to the VPS IPv4 address. If IPv6 is not
-configured, remove any stale `AAAA` record. Ports 80 and 443 must reach Caddy for ACME and HTTPS.
+Assign a stable public IPv4 address to the VPS. No domain or DNS record is required. Ports 80 and
+443 must reach Caddy so the ACME HTTP-01 challenge and HTTPS endpoint work.
 
 ## 2. Repository
 
@@ -135,9 +135,12 @@ sudo make vps-status
 sudo make vps-health
 ```
 
-Caddy obtains and renews HTTPS certificates automatically from the domain in `PUBLIC_HOST` and
-proxies only to the internal `api:8000`; PostgreSQL and the API publish no host ports. See
-[Caddy Automatic HTTPS](https://caddyserver.com/docs/automatic-https).
+Caddy 2.10.2 requests a public, short-lived certificate for the IPv4 address in `PUBLIC_HOST`
+through the ACME `shortlived` profile and renews it automatically. The Caddyfile disables the
+TLS-ALPN challenge so IPv4 issuance uses HTTP-01. Caddy proxies only to the internal `api:8000`;
+PostgreSQL and the API publish no host ports. See
+[Let's Encrypt IP address certificates](https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability.html)
+and the [Caddy TLS directive](https://caddyserver.com/docs/caddyfile/directives/tls).
 
 Install boot and backup units after the first successful deployment:
 
