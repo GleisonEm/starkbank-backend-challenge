@@ -96,6 +96,12 @@ jobs:
             --volume "$PWD/infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
             caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d \
             caddy validate --config /etc/caddy/Caddyfile
+          docker run --rm --env PUBLIC_HOST=159.223.160.99 \
+            --volume "$PWD/infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d \
+            caddy adapt --config /etc/caddy/Caddyfile | \
+            jq --exit-status \
+              '.apps.http.servers.srv0.tls_connection_policies[0].default_sni == "159.223.160.99"'
 
   local-smoke:
     runs-on: ubuntu-latest

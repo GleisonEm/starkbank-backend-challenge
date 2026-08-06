@@ -137,8 +137,9 @@ sudo make vps-health
 
 Caddy 2.10.2 requests a public, short-lived certificate for the IPv4 address in `PUBLIC_HOST`
 through the ACME `shortlived` profile and renews it automatically. The Caddyfile disables the
-TLS-ALPN challenge so IPv4 issuance uses HTTP-01. Caddy proxies only to the internal `api:8000`;
-PostgreSQL and the API publish no host ports. See
+TLS-ALPN challenge so IPv4 issuance uses HTTP-01 and sets the IP as the default SNI because HTTPS
+clients normally omit SNI when connecting to an IP address. Caddy proxies only to the internal
+`api:8000`; PostgreSQL and the API publish no host ports. See
 [Let's Encrypt IP address certificates](https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability.html)
 and the [Caddy TLS directive](https://caddyserver.com/docs/caddyfile/directives/tls).
 
