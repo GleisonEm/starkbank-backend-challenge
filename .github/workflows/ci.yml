@@ -134,7 +134,7 @@ jobs:
         run: make down
 
   publish:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     needs: [quality, compose-contracts, local-smoke]
     runs-on: ubuntu-latest
     permissions:
