@@ -55,8 +55,12 @@ sudo chmod 0644 /etc/starkbank-trial/vps.env
 sudoedit /etc/starkbank-trial/vps.env
 ```
 
-`vps.env` contains only non-secret configuration and the GHCR image pinned as
-`ghcr.io/gleisonem/starkbank-backend-challenge@sha256:<64 hex characters>`.
+`vps.env` contains only non-secret configuration and an approved release image pinned by digest.
+The primary repository is
+`ghcr.io/gleisonem/starkbank-backend-challenge@sha256:<64 hex characters>`. The release guard also
+allows `docker.io/gemanueldev/starkbank-backend-challenge@sha256:<64 hex characters>` as an
+explicit fallback when GitHub Packages cannot publish. Tags and arbitrary repositories are
+rejected.
 
 ## 4. GitHub production Environment
 

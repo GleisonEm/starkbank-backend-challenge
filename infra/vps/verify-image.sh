@@ -10,8 +10,9 @@ requested_image=${1:-}
 requested_revision=${2:-}
 
 case "$requested_image" in
-    ghcr.io/gleisonem/starkbank-backend-challenge@sha256:*) ;;
-    *) fail "image must be the repository GHCR image pinned by sha256 digest" ;;
+    ghcr.io/gleisonem/starkbank-backend-challenge@sha256:*|\
+    docker.io/gemanueldev/starkbank-backend-challenge@sha256:*) ;;
+    *) fail "image must use an approved repository pinned by sha256 digest" ;;
 esac
 requested_digest=${requested_image##*@sha256:}
 [ "${#requested_digest}" -eq 64 ] || fail "image digest must contain 64 characters"

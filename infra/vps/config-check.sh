@@ -35,8 +35,9 @@ case "$workspace_id" in
 esac
 
 case "$APP_IMAGE" in
-    ghcr.io/gleisonem/starkbank-backend-challenge@sha256:*) ;;
-    *) fail "APP_IMAGE must be the repository GHCR image pinned by sha256 digest" ;;
+    ghcr.io/gleisonem/starkbank-backend-challenge@sha256:*|\
+    docker.io/gemanueldev/starkbank-backend-challenge@sha256:*) ;;
+    *) fail "APP_IMAGE must use an approved repository pinned by sha256 digest" ;;
 esac
 digest=${APP_IMAGE##*@sha256:}
 [ "${#digest}" -eq 64 ] || fail "APP_IMAGE digest must contain 64 hexadecimal characters"

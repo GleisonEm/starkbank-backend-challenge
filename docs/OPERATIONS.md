@@ -30,6 +30,22 @@ sudo make vps-release \
   RELEASE_IMAGE=ghcr.io/gleisonem/starkbank-backend-challenge@sha256:<digest>
 ```
 
+If GitHub Actions cannot publish while the source repository remains available, a maintainer may
+build the exact public commit for `linux/amd64` and push it to the explicitly allowed Docker Hub
+fallback. Use the resulting digest in both commands:
+
+```bash
+sudo make vps-verify-image \
+  RELEASE_IMAGE=docker.io/gemanueldev/starkbank-backend-challenge@sha256:<digest> \
+  RELEASE_SOURCE_SHA=<full-40-character-commit>
+sudo make vps-release \
+  RELEASE_IMAGE=docker.io/gemanueldev/starkbank-backend-challenge@sha256:<digest>
+```
+
+The fallback does not weaken image validation: both repositories require an immutable digest and
+the image revision label must equal the checked-out public commit. No registry credentials or
+application secrets are stored in the repository or image.
+
 The release flow validates the digest and persistent runtime secret files, saves the old image,
 runs migrations, starts services and checks both internal and public readiness. It pulls a missing
 image, while the GitHub workflow preloads private GHCR images with ephemeral authentication. Pull,

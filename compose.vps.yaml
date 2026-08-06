@@ -1,5 +1,5 @@
 x-app: &app
-  image: ${APP_IMAGE:?set APP_IMAGE to a GHCR digest}
+  image: ${APP_IMAGE:?set APP_IMAGE to an approved image digest}
   env_file:
     - path: /etc/starkbank-trial/secrets/current/runtime.env
       required: true
