@@ -104,8 +104,10 @@ preferred over reusing personal SSH credentials.
 The workflow packages the three application secrets in its ephemeral runner and streams them to
 `install-secrets.sh` over SSH. The script validates the numeric Project ID, cryptographic PEM and
 database password before writing a versioned directory under `/etc/starkbank-trial/secrets` with
-directory mode `0700` and file mode `0600`. An atomic `current` symlink switches all three values
-together. No GitHub credential is stored on the VPS.
+directory mode `0700`. The environment and PostgreSQL password use root-owned mode `0600`; the
+private key uses mode `0400` and container UID/GID `10001`, which is readable only through the
+Docker bind mount because the host parent directories remain root-only. An atomic `current`
+symlink switches all three values together. No GitHub credential is stored on the VPS.
 
 ```bash
 sudo make vps-config-check

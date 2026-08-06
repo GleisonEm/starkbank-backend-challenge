@@ -1,8 +1,11 @@
-x-app: &app
+x-app-image: &app-image
   image: starkbank-trial:local
   build:
     context: .
     target: runtime
+
+x-app: &app
+  <<: *app-image
   env_file:
     - path: .env
       required: true
@@ -11,13 +14,38 @@ x-app: &app
     STARKBANK_ENVIRONMENT: sandbox
     STARKBANK_PRIVATE_KEY_FILE: /run/secrets/starkbank_private_key
     LOG_FILE: /app/logs/starkbank-trial.jsonl
-  secrets:
-    - starkbank_private_key
   volumes:
     - app_logs:/app/logs
+    - runtime_secrets:/run/secrets:ro
   restart: unless-stopped
 
 services:
+  key-init:
+    <<: *app-image
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >-
+        install -m 0400 -o 10001 -g 10001
+        /run/secrets/starkbank_private_key_source
+        /prepared/starkbank_private_key
+    secrets:
+      - source: starkbank_private_key
+        target: starkbank_private_key_source
+    volumes:
+      - runtime_secrets:/prepared
+    network_mode: none
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - FOWNER
+    pids_limit: 32
+    restart: "no"
+
   postgres:
     image: postgres:17.6-bookworm@sha256:f3bd19c606e442c3d7bdfa8002e03fe260a1023351e0ea4598032022b68dd6e3
     environment:
@@ -39,6 +67,8 @@ services:
     <<: *app
     command: ["starkbank-trial", "db", "upgrade"]
     depends_on:
+      key-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
     restart: "no"
@@ -97,3 +127,4 @@ secrets:
 volumes:
   app_logs:
   postgres_data:
+  runtime_secrets:

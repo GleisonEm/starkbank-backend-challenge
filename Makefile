@@ -42,6 +42,7 @@ up: validate-env
 
 down:
 	$(LOCAL_COMPOSE) --profile tunnel down --remove-orphans
+	@docker volume rm starkbank-trial-local_runtime_secrets >/dev/null 2>&1 || true
 
 restart: down up
 

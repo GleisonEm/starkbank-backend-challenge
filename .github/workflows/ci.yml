@@ -89,7 +89,7 @@ jobs:
             project-id private-key.pem postgres-password | \
             sudo ./infra/vps/install-secrets.sh
           sudo ./infra/vps/validate-secrets.sh
-          docker compose --env-file /tmp/starkbank-vps.env -f compose.vps.yaml \
+          sudo docker compose --env-file /tmp/starkbank-vps.env -f compose.vps.yaml \
             -p starkbank-trial-vps config --quiet
           docker run --rm --env PUBLIC_HOST=trial.example.com \
             --volume "$PWD/infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
@@ -107,9 +107,18 @@ jobs:
           sed -i 's/^STARKBANK_PROJECT_ID=.*/STARKBANK_PROJECT_ID=123456789/' .env
       - run: make build
       - run: make keygen
-      - run: make up
-      - run: make health
-      - run: make ps
+      - name: Start local stack
+        run: make up
+      - name: Check local readiness
+        run: make health
+      - name: Show local services
+        run: make ps
+      - name: Capture service diagnostics
+        if: failure()
+        run: |
+          docker compose --env-file .env -f compose.yaml -p starkbank-trial-local ps
+          docker compose --env-file .env -f compose.yaml -p starkbank-trial-local \
+            logs --no-color --tail=200 api worker scheduler migrate
       - if: always()
         run: make down
 

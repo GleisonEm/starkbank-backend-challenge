@@ -29,13 +29,23 @@ fi
 [ "$(stat -Lc '%u' "$SECRETS_DIR")" -eq 0 ] || fail "$SECRETS_DIR must be owned by root"
 [ "$(stat -Lc '%a' "$SECRETS_DIR")" -eq 700 ] || fail "$SECRETS_DIR must have mode 0700"
 
-for secret_file in runtime.env postgres-password starkbank-private-key.pem; do
+for secret_file in runtime.env postgres-password; do
     secret_path="$SECRETS_DIR/$secret_file"
     require_file "$secret_path"
     [ ! -L "$secret_path" ] || fail "$secret_path must not be a symbolic link"
     [ "$(stat -c '%u' "$secret_path")" -eq 0 ] || fail "$secret_path must be owned by root"
     [ "$(stat -c '%a' "$secret_path")" -eq 600 ] || fail "$secret_path must have mode 0600"
 done
+
+private_key_path="$SECRETS_DIR/starkbank-private-key.pem"
+require_file "$private_key_path"
+[ ! -L "$private_key_path" ] || fail "$private_key_path must not be a symbolic link"
+[ "$(stat -c '%u' "$private_key_path")" -eq 10001 ] || \
+    fail "$private_key_path must be owned by container UID 10001"
+[ "$(stat -c '%g' "$private_key_path")" -eq 10001 ] || \
+    fail "$private_key_path must be owned by container GID 10001"
+[ "$(stat -c '%a' "$private_key_path")" -eq 400 ] || \
+    fail "$private_key_path must have mode 0400"
 
 runtime_env="$SECRETS_DIR/runtime.env"
 [ "$(grep -c '^DATABASE_URL=' "$runtime_env")" -eq 1 ] || \
@@ -61,7 +71,7 @@ expected_database_url="postgresql+psycopg://$POSTGRES_USER:$postgres_password@po
 [ "$(config_value "$runtime_env" DATABASE_URL)" = "$expected_database_url" ] || \
     fail "DATABASE_URL does not match VPS database configuration"
 
-openssl pkey -in "$SECRETS_DIR/starkbank-private-key.pem" -check -noout >/dev/null 2>&1 || \
+openssl pkey -in "$private_key_path" -check -noout >/dev/null 2>&1 || \
     fail "stored Stark Bank private key is invalid"
 
 printf 'VPS runtime secret files are valid.\n'

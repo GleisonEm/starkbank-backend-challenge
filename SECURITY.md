@@ -9,11 +9,15 @@ proofs that move money in a public issue.
 - `.env`, PEM files and `secrets/*` are ignored by Git and excluded from Docker build context.
 - The image contains no key, provider Project ID, PostgreSQL password or deployment credential.
 - Local Compose mounts the evaluator-provided key at `/run/secrets/starkbank_private_key`.
+- A one-shot, network-isolated local initializer copies that mounted key into an ephemeral Docker
+  volume as UID `10001` with mode `0400`; `make down` removes the copied runtime key.
 - VPS secrets are stored in the protected GitHub `production` Environment and are available only
   to its manually approved deployment job.
 - The workflow sends Project ID, key and database password through SSH standard input. The VPS
-  validates them before installing root-owned mode `0600` files under
-  `/etc/starkbank-trial/secrets`; an atomic symlink activates the complete set and values never
+  validates them before installing files under the root-only
+  `/etc/starkbank-trial/secrets`; the private key is owned by container UID `10001` with mode
+  `0400`, while the environment and database password remain root-owned mode `0600`. An atomic
+  symlink activates the complete set and values never
   appear in command arguments or workflow summaries.
 - Secrets persist across reboot so the VPS does not retain a GitHub token or depend on GitHub
   availability during startup.

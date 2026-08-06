@@ -59,7 +59,7 @@ printf '%s' "$postgres_password" > "$release_dir/postgres-password"
     printf 'STARKBANK_PROJECT_ID=%s\n' "$project_id"
 } > "$release_dir/runtime.env"
 
-install -m 0600 -o root -g root "$private_key_file" \
+install -m 0400 -o 10001 -g 10001 "$private_key_file" \
     "$release_dir/starkbank-private-key.pem"
 chmod 0600 "$release_dir/postgres-password" "$release_dir/runtime.env"
 chown root:root "$release_dir/postgres-password" "$release_dir/runtime.env"
