@@ -34,6 +34,8 @@ The release flow validates the digest and persistent runtime secret files, saves
 runs migrations, starts services and checks both internal and public readiness. It pulls a missing
 image, while the GitHub workflow preloads private GHCR images with ephemeral authentication. Pull,
 startup or health failure restores the previous `APP_IMAGE` and attempts to bring it back up.
+Caddy is force-recreated so source-only proxy configuration changes are loaded; public readiness
+retries are bounded while an initial ACME certificate is issued.
 
 The `deploy-vps` GitHub workflow performs this command over SSH only after manual approval of the
 `production` Environment. Configure required reviewers, prevent self-review, restrict deployment
