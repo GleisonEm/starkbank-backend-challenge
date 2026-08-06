@@ -24,3 +24,5 @@ class TransferJob:
     status: TransferStatus
     attempts: int
     lease_until: datetime
+
+    claimed_from: TransferStatus | None = None

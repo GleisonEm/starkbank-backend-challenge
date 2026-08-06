@@ -59,6 +59,7 @@ jobs:
             shellcheck -x infra/local/keygen.sh infra/local/tunnel-url.sh \
             infra/local/validate-env.sh infra/vps/backup.sh infra/vps/config-check.sh \
             infra/vps/health.sh infra/vps/install-secrets.sh infra/vps/install-systemd.sh \
+            infra/vps/live-mode.sh \
             infra/vps/pull-private-image.sh infra/vps/release.sh infra/vps/restore.sh \
             infra/vps/validate-secrets.sh \
             infra/vps/verify-image.sh
@@ -70,6 +71,7 @@ jobs:
           cp .env.example .env
           sed -i 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=ci-local-password/' .env
           sed -i 's/^STARKBANK_PROJECT_ID=.*/STARKBANK_PROJECT_ID=123456789/' .env
+          sed -i 's/^STARKBANK_WORKSPACE_ID=.*/STARKBANK_WORKSPACE_ID=6230775361961984/' .env
           mkdir -p secrets
           printf '%s\n' '-----BEGIN PRIVATE KEY-----' 'ci-placeholder' '-----END PRIVATE KEY-----' > secrets/private-key.pem
           docker compose --env-file .env -f compose.yaml -p starkbank-trial-local config --quiet
@@ -112,6 +114,7 @@ jobs:
           cp .env.example .env
           sed -i 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=ci-local-password/' .env
           sed -i 's/^STARKBANK_PROJECT_ID=.*/STARKBANK_PROJECT_ID=123456789/' .env
+          sed -i 's/^STARKBANK_WORKSPACE_ID=.*/STARKBANK_WORKSPACE_ID=6230775361961984/' .env
       - run: make build
       - run: make keygen
       - name: Start local stack

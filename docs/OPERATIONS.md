@@ -44,6 +44,7 @@ to `main`, and add only these environment secrets. GitHub documents these gates 
 
 - `VPS_SSH_KEY`
 - `STARKBANK_PROJECT_ID`
+- `STARKBANK_WORKSPACE_ID` (non-secret Sandbox workspace binding)
 - `STARKBANK_PRIVATE_KEY_PEM`
 - `POSTGRES_PASSWORD`
 
@@ -55,6 +56,20 @@ Configure these non-secret Environment variables separately:
 - `VPS_HOST`
 - `VPS_KNOWN_HOSTS`
 - `VPS_USER`
+
+## Sandbox live-mode control
+
+The deployment starts with provider writes disabled. The VPS commands atomically update the
+non-secret mode and recreate API, worker and scheduler together:
+
+```bash
+sudo make vps-live-status
+sudo make vps-live-enable CONFIRM_SANDBOX=yes
+sudo make vps-live-disable
+```
+
+The disable command is an emergency stop and does not require confirmation. Read-only queries and
+signed webhook persistence remain available while writes are disabled.
 
 The workflow also requires the full source SHA printed by CI. It checks out that exact commit on
 the VPS, streams the workflow's short-lived `GITHUB_TOKEN` to a one-shot private-image pull, and

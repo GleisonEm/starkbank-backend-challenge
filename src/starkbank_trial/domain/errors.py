@@ -36,3 +36,11 @@ class MissingProviderConfigurationError(TrialError):
 
     def __str__(self) -> str:
         return f"missing provider configuration: {', '.join(self.missing_fields)}"
+
+
+@dataclass(slots=True)
+class LiveOperationsDisabledError(TrialError):
+    operation: str
+
+    def __str__(self) -> str:
+        return f"Sandbox live operations are disabled: {self.operation}"

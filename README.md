@@ -32,6 +32,8 @@ security boundary.
 
 The production webhook endpoint is `https://159.223.160.99/webhooks/starkbank`. Caddy obtains a
 public short-lived certificate for that IPv4 address and renews it automatically.
+The Sandbox Workspace is configured through the non-secret `STARKBANK_WORKSPACE_ID` and is
+checked after signature verification, before any event is persisted.
 
 To run an independent local copy:
 
@@ -90,8 +92,15 @@ operations, then create the webhook:
 ```bash
 make sandbox-check
 make webhook-setup
+make webhook-cleanup CONFIRM_SANDBOX=yes
 make smoke-invoice CONFIRM_SANDBOX=yes
+make smoke-batch COUNT=8 CONFIRM_SANDBOX=yes
 ```
+
+On the VPS, use `sudo make vps-live-enable CONFIRM_SANDBOX=yes` only for the validation window,
+`sudo make vps-live-disable` as the emergency stop, then `sudo make vps-smoke-batch COUNT=8
+CONFIRM_SANDBOX=yes`. The accelerated batch is idempotent by `REFERENCE` and does not replace the
+official eight-slot, 24-hour schedule started with `sudo make vps-trial-start CONFIRM_SANDBOX=yes`.
 
 Cloudflare documents Quick Tunnels as development-only, random `trycloudflare.com` endpoints
 without an uptime SLA. They are never used by the VPS. Ngrok is documented only as an
@@ -104,5 +113,6 @@ account/token-based alternative.
 - [`docs/VPS.md`](docs/VPS.md): manual VPS installation and independent production configuration
 - [`docs/VPS_REVIEW.md`](docs/VPS_REVIEW.md): evaluator SSH inspection guide
 - [`docs/OPERATIONS.md`](docs/OPERATIONS.md): deploy, logs, backup, restore and rollback
+- [`docs/EVIDENCE.md`](docs/EVIDENCE.md): redacted release, smoke and trial evidence
 - [`SECURITY.md`](SECURITY.md): secrets, hardening, sudo exposure and revocation
 - [`RESEARCH.md`](RESEARCH.md): SDK compatibility and technical research

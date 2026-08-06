@@ -1,18 +1,18 @@
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 
 from starkbank_trial.application.payers import build_invoice_drafts
 from starkbank_trial.application.trials import TrialService, TrialTickResult
 from starkbank_trial.domain.invoices import InvoiceDraft, ProviderInvoice
-from starkbank_trial.domain.provider import ProviderTimeoutError
-from starkbank_trial.domain.status import BatchStatus
+from starkbank_trial.domain.provider import ProviderTimeoutError, ProviderTransientError
+from starkbank_trial.domain.status import BatchStatus, DraftStatus
 from starkbank_trial.domain.trials import InvoiceBatch
 from starkbank_trial.domain.types import BatchId, InvoiceId, TrialRunId
-from starkbank_trial.persistence.schema import metadata
+from starkbank_trial.persistence.schema import invoice_drafts, metadata
 from starkbank_trial.persistence.stores import Stores, build_stores
 
 
@@ -116,3 +116,40 @@ def test_trial_reconciles_timeout_by_tag_without_recreating_invoice(stores: Stor
     assert reconciled == 1
     assert len(provider.created) == 8
     assert service.tick() is TrialTickResult.NO_BATCH
+
+
+def test_invoice_retries_are_bounded_and_end_in_failed(stores: Stores) -> None:
+    class AlwaysTransientProvider(RecordingInvoiceProvider):
+        def create_invoice(self, draft: InvoiceDraft) -> ProviderInvoice:
+            self.created.append(draft)
+            raise ProviderTransientError(operation="invoice.create")
+
+    now = datetime(2026, 8, 1, 12, tzinfo=UTC)
+    clock = FixedClock(now)
+    provider = AlwaysTransientProvider()
+    service = TrialService(
+        stores,
+        provider,
+        clock,
+        FixedBatchCounts((8,) * 8),
+        retry_base_seconds=5,
+        invoice_max_attempts=5,
+    )
+    service.start(now)
+
+    for delay in (0, 5, 15, 35, 75):
+        clock.value = now + timedelta(seconds=delay)
+        service.tick()
+
+    with stores.invoices.engine.connect() as connection:
+        rows = connection.execute(
+            select(
+                invoice_drafts.c.status,
+                invoice_drafts.c.attempts,
+                invoice_drafts.c.last_error_code,
+            )
+        ).all()
+    assert len(rows) == 8
+    assert all(row.status == DraftStatus.FAILED for row in rows)
+    assert all(row.attempts == 5 for row in rows)
+    assert all(row.last_error_code == "retry_exhausted" for row in rows)

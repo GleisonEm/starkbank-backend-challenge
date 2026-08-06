@@ -7,7 +7,11 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from starkbank_trial.bootstrap import Services, build_services
 from starkbank_trial.config import Settings
-from starkbank_trial.domain.provider import InvalidWebhookError, ProviderTransientError
+from starkbank_trial.domain.provider import (
+    InvalidWebhookError,
+    ProviderTransientError,
+    UnexpectedWorkspaceError,
+)
 from starkbank_trial.logging import configure_logging
 
 logger = structlog.get_logger()
@@ -44,6 +48,13 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         except InvalidWebhookError:
             logger.warning("webhook_rejected", reason="invalid_signature_or_payload")
             return jsonify(error="invalid webhook"), HTTPStatus.BAD_REQUEST
+        except UnexpectedWorkspaceError as error:
+            logger.warning(
+                "webhook_ignored_workspace",
+                reason="unexpected_workspace",
+                workspace_id=error.workspace_id,
+            )
+            return jsonify(status="ignored_workspace")
         except ProviderTransientError:
             logger.exception("webhook_verification_unavailable")
             return jsonify(error="verification unavailable"), HTTPStatus.SERVICE_UNAVAILABLE

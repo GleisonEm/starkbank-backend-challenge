@@ -7,20 +7,22 @@ VPS_COMPOSE = docker compose --env-file /etc/starkbank-trial/vps.env -f compose.
 .DEFAULT_GOAL := help
 
 .PHONY: help env-init keygen validate-env build up down restart health ps logs logs-webhook \
-	test check tunnel tunnel-url tunnel-down sandbox-check webhook-setup webhook-list \
-	smoke-invoice trial-start trial-status reset vps-config-check vps-secrets vps-pull \
+	test check tunnel tunnel-url tunnel-down sandbox-check webhook-setup webhook-list webhook-cleanup \
+	smoke-invoice smoke-batch trial-start trial-status reset vps-config-check vps-secrets vps-pull \
 	vps-deploy vps-up vps-down vps-health vps-status vps-trial-status vps-logs \
-	vps-auth-pull vps-release vps-verify-image vps-backup vps-restore vps-rollback
+	vps-auth-pull vps-release vps-verify-image vps-backup vps-restore vps-rollback \
+	vps-smoke-batch vps-trial-start vps-live-enable vps-live-disable vps-live-status
 
 help:
 	@printf '%s\n' \
 		'Local: env-init keygen validate-env build up down restart health ps logs logs-webhook' \
 		'Checks: test check' \
 		'Tunnel: tunnel tunnel-url tunnel-down' \
-		'Sandbox: sandbox-check webhook-setup webhook-list smoke-invoice trial-start trial-status' \
+		'Sandbox: sandbox-check webhook-setup webhook-list webhook-cleanup smoke-invoice smoke-batch trial-start trial-status' \
 		'VPS: vps-config-check vps-secrets vps-pull vps-deploy vps-up vps-down vps-health' \
 		'     vps-status vps-trial-status vps-logs vps-release vps-verify-image' \
-		'     vps-auth-pull vps-backup vps-restore vps-rollback'
+		'     vps-auth-pull vps-backup vps-restore vps-rollback' \
+		'     vps-smoke-batch vps-trial-start vps-live-enable vps-live-disable'
 
 env-init:
 	@test ! -e .env || { printf '.env already exists; refusing to overwrite it.\n' >&2; exit 1; }
@@ -92,9 +94,17 @@ webhook-setup: sandbox-check
 webhook-list: validate-env
 	$(LOCAL_COMPOSE) run --rm scheduler starkbank-trial provider list-webhooks
 
+webhook-cleanup: sandbox-check
+	@test "$(CONFIRM_SANDBOX)" = yes || { printf 'Pass CONFIRM_SANDBOX=yes.\n' >&2; exit 1; }
+	$(LOCAL_COMPOSE) run --rm scheduler starkbank-trial provider cleanup-webhooks --confirm-sandbox
+
 smoke-invoice: sandbox-check
 	@test "$(CONFIRM_SANDBOX)" = yes || { printf 'Pass CONFIRM_SANDBOX=yes.\n' >&2; exit 1; }
 	$(LOCAL_COMPOSE) run --rm scheduler starkbank-trial provider smoke-invoice --confirm-sandbox
+
+smoke-batch: sandbox-check
+	@test "$(CONFIRM_SANDBOX)" = yes || { printf 'Pass CONFIRM_SANDBOX=yes.\n' >&2; exit 1; }
+	$(LOCAL_COMPOSE) run --rm scheduler starkbank-trial provider smoke-batch --count "$${COUNT:-8}" --reference "$${REFERENCE:-smoke-batch-1}" --confirm-sandbox
 
 trial-start: sandbox-check
 	@test "$(CONFIRM_SANDBOX)" = yes || { printf 'Pass CONFIRM_SANDBOX=yes.\n' >&2; exit 1; }
@@ -138,6 +148,28 @@ vps-status: vps-config-check
 
 vps-trial-status: vps-config-check
 	$(VPS_COMPOSE) run --rm scheduler starkbank-trial trial status
+
+vps-smoke-batch: vps-config-check
+	@test "$(CONFIRM_SANDBOX)" = yes || { printf 'Pass CONFIRM_SANDBOX=yes.\n' >&2; exit 1; }
+	$(VPS_COMPOSE) run --rm scheduler starkbank-trial provider smoke-batch --count "$${COUNT:-8}" --reference "$${REFERENCE:-smoke-batch-1}" --confirm-sandbox
+
+vps-trial-start: vps-config-check
+	@test "$(CONFIRM_SANDBOX)" = yes || { printf 'Pass CONFIRM_SANDBOX=yes.\n' >&2; exit 1; }
+	$(VPS_COMPOSE) run --rm scheduler starkbank-trial trial start
+
+vps-webhook-cleanup: vps-config-check
+	@test "$(CONFIRM_SANDBOX)" = yes || { printf 'Pass CONFIRM_SANDBOX=yes.\n' >&2; exit 1; }
+	$(VPS_COMPOSE) run --rm scheduler starkbank-trial provider cleanup-webhooks --confirm-sandbox
+
+vps-live-enable: vps-config-check
+	@test "$(CONFIRM_SANDBOX)" = yes || { printf 'Pass CONFIRM_SANDBOX=yes.\n' >&2; exit 1; }
+	./infra/vps/live-mode.sh enable
+
+vps-live-disable: vps-config-check
+	./infra/vps/live-mode.sh disable
+
+vps-live-status: vps-config-check
+	@awk -F= '$$1 == "STARKBANK_SANDBOX_LIVE_ENABLED" {print $$2}' /etc/starkbank-trial/vps.env
 
 vps-logs: vps-config-check
 	$(VPS_COMPOSE) logs --follow --tail=200

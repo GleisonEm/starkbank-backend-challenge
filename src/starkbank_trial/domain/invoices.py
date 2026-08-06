@@ -17,6 +17,7 @@ class InvoiceDraft:
     status: DraftStatus
     attempts: int
     created_at: datetime
+    next_attempt_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

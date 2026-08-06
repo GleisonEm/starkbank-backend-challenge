@@ -80,6 +80,7 @@ class TransferStore:
             status=TransferStatus.PROCESSING,
             attempts=attempts,
             lease_until=claim.lease_until,
+            claimed_from=TransferStatus(str(row["status"])),
         )
 
     def succeeded(

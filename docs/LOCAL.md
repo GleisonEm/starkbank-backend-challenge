@@ -43,6 +43,7 @@ Edit `.env`:
 
 - replace `POSTGRES_PASSWORD=change-local-password`;
 - set the numeric `STARKBANK_PROJECT_ID`;
+- set the numeric `STARKBANK_WORKSPACE_ID` for the Sandbox Project;
 - leave `PUBLIC_BASE_URL` empty until a tunnel exists;
 - leave `STARKBANK_SANDBOX_LIVE_ENABLED=false` during ordinary startup.
 
@@ -67,6 +68,14 @@ make check
 make logs
 make logs-webhook
 ```
+
+For accelerated validation, enable Sandbox writes only when ready and run:
+
+```bash
+make smoke-batch COUNT=8 CONFIRM_SANDBOX=yes
+```
+
+Repeating the command with the same `REFERENCE` reuses the same provider Invoices.
 
 `make test` and `make check` use `compose.test.yaml`, an isolated temporary PostgreSQL service
 and fake provider boundaries. They do not load `.env`, mount a private key or call Sandbox.

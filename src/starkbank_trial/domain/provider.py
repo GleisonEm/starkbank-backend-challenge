@@ -26,6 +26,11 @@ class ProviderTimeoutError(ProviderTransientError):
 
 
 @dataclass(slots=True)
+class ProviderUnknownOutcomeError(ProviderTimeoutError):
+    pass
+
+
+@dataclass(slots=True)
 class ProviderPermanentError(ProviderError):
     pass
 
@@ -33,6 +38,14 @@ class ProviderPermanentError(ProviderError):
 @dataclass(slots=True)
 class InvalidWebhookError(ProviderError):
     pass
+
+
+@dataclass(slots=True)
+class UnexpectedWorkspaceError(ProviderError):
+    workspace_id: str
+
+    def __str__(self) -> str:
+        return f"provider event belongs to an unexpected workspace: {self.operation}"
 
 
 class InvoiceProvider(Protocol):
@@ -57,6 +70,8 @@ class ProviderWebhook:
 
 class TransferProvider(Protocol):
     def ensure_transfer(self, command: TransferCommand) -> ProviderTransfer: ...
+
+    def find_transfer(self, command: TransferCommand) -> ProviderTransfer | None: ...
 
 
 class WebhookVerifier(Protocol):

@@ -4,6 +4,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     MetaData,
     String,
@@ -74,8 +75,12 @@ invoice_drafts = Table(
     Column("last_error_code", String(80)),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
+    Column("next_attempt_at", DateTime(timezone=True), nullable=False),
     UniqueConstraint("batch_id", "ordinal"),
     CheckConstraint("amount > 0", name="amount"),
+)
+invoice_drafts.append_constraint(
+    Index("ix_invoice_drafts_status_next_attempt_at", "status", "next_attempt_at")
 )
 
 webhook_events = Table(

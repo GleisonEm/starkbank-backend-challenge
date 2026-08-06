@@ -1,5 +1,8 @@
 from dataclasses import dataclass
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn, cast
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 import starkbank
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -11,16 +14,18 @@ from starkbank.error import (
     UnknownError,
 )
 
+from starkbank_trial.domain.errors import LiveOperationsDisabledError
 from starkbank_trial.domain.events import CreditedInvoiceEvent, IgnoredEvent, VerifiedEvent
 from starkbank_trial.domain.invoices import InvoiceDraft, ProviderInvoice
 from starkbank_trial.domain.models import TransferCommand
 from starkbank_trial.domain.provider import (
     InvalidWebhookError,
     ProviderPermanentError,
-    ProviderTimeoutError,
     ProviderTransfer,
     ProviderTransientError,
+    ProviderUnknownOutcomeError,
     ProviderWebhook,
+    UnexpectedWorkspaceError,
 )
 from starkbank_trial.domain.types import Cents, EventId, ExternalId, InvoiceId, TransferId
 
@@ -77,12 +82,26 @@ class _SdkWebhook(BaseModel):
 @dataclass(frozen=True, slots=True)
 class StarkBankClient:
     user: starkbank.Project
+    expected_workspace_id: str | None = None
+    live_operations_enabled: bool = False
 
     @classmethod
-    def from_credentials(cls, project_id: str, private_key: str) -> "StarkBankClient":
-        return cls(starkbank.Project(project_id, "sandbox", private_key))
+    def from_credentials(
+        cls,
+        project_id: str,
+        private_key: str,
+        *,
+        expected_workspace_id: str | None = None,
+        live_operations_enabled: bool = False,
+    ) -> "StarkBankClient":
+        return cls(
+            starkbank.Project(project_id, "sandbox", private_key),
+            expected_workspace_id=expected_workspace_id,
+            live_operations_enabled=live_operations_enabled,
+        )
 
     def create_invoice(self, draft: InvoiceDraft) -> ProviderInvoice:
+        self._require_live("create_invoice")
         request = starkbank.Invoice(
             amount=draft.amount,
             tax_id=draft.payer_tax_id,
@@ -93,7 +112,7 @@ class StarkBankClient:
             created = starkbank.invoice.create([request], user=self.user)
             invoice = _SdkInvoice.model_validate(created[0])
         except IndexError as error:
-            raise ProviderTransientError(operation="create_invoice_empty") from error
+            raise ProviderUnknownOutcomeError(operation="create_invoice_empty") from error
         except (StarkError, ValidationError) as error:
             self._raise_provider(error, "create_invoice", unknown_outcome=True)
         return ProviderInvoice(id=InvoiceId(invoice.id), tag=draft.tag)
@@ -110,6 +129,7 @@ class StarkBankClient:
         return ProviderInvoice(id=InvoiceId(parsed.id), tag=tag)
 
     def ensure_transfer(self, command: TransferCommand) -> ProviderTransfer:
+        self._require_live("ensure_transfer")
         existing = self._find_transfer(command)
         if existing is not None:
             return existing
@@ -130,7 +150,7 @@ class StarkBankClient:
             created = starkbank.transfer.create([request], user=self.user)
             transfer = _SdkTransfer.model_validate(created[0])
         except IndexError as error:
-            raise ProviderTransientError(operation="create_transfer_empty") from error
+            raise ProviderUnknownOutcomeError(operation="create_transfer_empty") from error
         except InputErrors as error:
             reconciled = self._find_transfer(command)
             if reconciled is not None:
@@ -140,10 +160,14 @@ class StarkBankClient:
             self._raise_provider(error, "create_transfer", unknown_outcome=True)
         return self._provider_transfer(transfer)
 
+    def find_transfer(self, command: TransferCommand) -> ProviderTransfer | None:
+        return self._find_transfer(command)
+
     def verify_event(self, content: bytes, signature: str) -> VerifiedEvent:
         try:
             raw_event = starkbank.event.parse(content.decode(), signature, user=self.user)
             event = _SdkEvent.model_validate(raw_event)
+            self._assert_expected_workspace(event.workspace_id)
             log = _SdkLog.model_validate(event.log)
             if event.subscription != "invoice" or log.type != "credited":
                 return IgnoredEvent(
@@ -154,6 +178,8 @@ class StarkBankClient:
                 )
             credited_log = _SdkCreditedLog.model_validate(event.log)
             invoice = _SdkCreditedInvoice.model_validate(credited_log.invoice)
+        except UnexpectedWorkspaceError:
+            raise
         except (UnicodeDecodeError, InvalidSignatureError, ValidationError) as error:
             raise InvalidWebhookError(operation="verify_event") from error
         except (InternalServerError, UnknownError) as error:
@@ -167,8 +193,9 @@ class StarkBankClient:
         )
 
     def ensure_webhook(self, url: str) -> ProviderWebhook:
+        self._require_live("ensure_webhook")
         for existing in self.list_webhooks():
-            if existing.url == url and "invoice" in existing.subscriptions:
+            if existing.url == url and set(existing.subscriptions) == {"invoice"}:
                 return existing
         try:
             created = starkbank.webhook.create(url, ["invoice"], user=self.user)
@@ -176,6 +203,16 @@ class StarkBankClient:
         except (StarkError, ValidationError) as error:
             self._raise_provider(error, "ensure_webhook", unknown_outcome=True)
         return self._provider_webhook(webhook)
+
+    def delete_webhook(self, webhook_id: str) -> None:
+        self._require_live("delete_webhook")
+        delete = cast("Callable[..., object] | None", getattr(starkbank.webhook, "delete", None))
+        if delete is None:
+            raise ProviderPermanentError(operation="delete_webhook")
+        try:
+            delete(webhook_id, user=self.user)
+        except StarkError as error:
+            self._raise_provider(error, "delete_webhook", unknown_outcome=True)
 
     def list_webhooks(self) -> tuple[ProviderWebhook, ...]:
         try:
@@ -213,10 +250,20 @@ class StarkBankClient:
     def _provider_webhook(webhook: _SdkWebhook) -> ProviderWebhook:
         return ProviderWebhook(webhook.id, webhook.url, tuple(webhook.subscriptions))
 
+    def _require_live(self, operation: str) -> None:
+        if not self.live_operations_enabled:
+            raise LiveOperationsDisabledError(operation=operation)
+
+    def _assert_expected_workspace(self, workspace_id: str) -> None:
+        if self.expected_workspace_id is not None and workspace_id != self.expected_workspace_id:
+            raise UnexpectedWorkspaceError(operation="verify_event", workspace_id=workspace_id)
+
     @staticmethod
     def _raise_provider(error: Exception, operation: str, *, unknown_outcome: bool) -> NoReturn:
-        if isinstance(error, UnknownError) and unknown_outcome:
-            raise ProviderTimeoutError(operation=operation) from error
+        if unknown_outcome and isinstance(
+            error, (InternalServerError, UnknownError, ValidationError)
+        ):
+            raise ProviderUnknownOutcomeError(operation=operation) from error
         if isinstance(error, (InternalServerError, UnknownError)):
             raise ProviderTransientError(operation=operation) from error
         raise ProviderPermanentError(operation=operation) from error

@@ -50,6 +50,9 @@ class FakeGateway:
     def ensure_transfer(self, command: TransferCommand) -> ProviderTransfer:
         return ProviderTransfer(TransferId("transfer-1"), command.external_id, "created")
 
+    def find_transfer(self, command: TransferCommand) -> ProviderTransfer | None:
+        return None
+
     def verify_event(self, content: bytes, signature: str) -> VerifiedEvent:
         return IgnoredEvent(EventId("event-1"), "transfer", "created", "workspace-1")
 
@@ -140,6 +143,57 @@ def test_provider_list_webhooks_emits_safe_machine_readable_results(
                 "url": "https://trial.example.com/webhooks/starkbank",
             }
         ]
+    }
+
+
+def test_provider_cleanup_webhooks_keeps_only_invoice_subscription(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CleanupGateway(FakeGateway):
+        def __init__(self) -> None:
+            super().__init__()
+            self.deleted: list[str] = []
+
+        def list_webhooks(self) -> tuple[ProviderWebhook, ...]:
+            return (
+                ProviderWebhook(
+                    id="webhook-old",
+                    url="https://old.example.com/webhooks/starkbank",
+                    subscriptions=("invoice",),
+                ),
+                ProviderWebhook(
+                    id="webhook-wrong",
+                    url="https://trial.example.com/webhooks/starkbank",
+                    subscriptions=("invoice", "transfer"),
+                ),
+            )
+
+        def delete_webhook(self, webhook_id: str) -> None:
+            self.deleted.append(webhook_id)
+
+        def ensure_webhook(self, url: str) -> ProviderWebhook:
+            return ProviderWebhook("webhook-new", url, ("invoice",))
+
+    gateway = CleanupGateway()
+    monkeypatch.setenv("STARKBANK_SANDBOX_LIVE_ENABLED", "true")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://trial.example.com")
+
+    def fixed_client(settings: Settings) -> CleanupGateway:
+        return gateway
+
+    monkeypatch.setattr(cli_module, "build_client", fixed_client)
+
+    result = CliRunner().invoke(
+        cli_module.app,
+        ["provider", "cleanup-webhooks", "--confirm-sandbox"],
+    )
+
+    assert result.exit_code == 0
+    assert gateway.deleted == ["webhook-old", "webhook-wrong"]
+    assert json.loads(result.stdout) == {
+        "active_url": "https://trial.example.com/webhooks/starkbank",
+        "removed": 2,
+        "subscription": "invoice",
     }
 
 

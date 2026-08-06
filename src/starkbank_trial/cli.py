@@ -10,9 +10,12 @@ import typer
 from alembic import command
 from alembic.config import Config
 
+from starkbank_trial.application.clock import SystemClock
 from starkbank_trial.application.payers import build_smoke_invoice
+from starkbank_trial.application.smoke import SmokeBatchService
 from starkbank_trial.bootstrap import Services, build_client, build_services
 from starkbank_trial.config import Settings
+from starkbank_trial.domain.errors import LiveOperationsDisabledError
 from starkbank_trial.domain.provider import ProviderError
 from starkbank_trial.logging import configure_logging
 
@@ -26,6 +29,10 @@ app.add_typer(trial_app, name="trial")
 app.add_typer(worker_app, name="worker")
 app.add_typer(provider_app, name="provider")
 
+SANDBOX_CONFIRMATION_ERROR = (
+    "live Sandbox calls require STARKBANK_SANDBOX_LIVE_ENABLED=true and --confirm-sandbox"
+)
+
 
 def _services() -> Services:
     settings = Settings()
@@ -38,7 +45,7 @@ def _write_result(result: StrEnum | dict[str, str | int]) -> None:
     typer.echo(json.dumps(payload, sort_keys=True))
 
 
-def _exit_provider_error(error: ProviderError) -> NoReturn:
+def _exit_provider_error(error: ProviderError | LiveOperationsDisabledError) -> NoReturn:
     typer.echo(
         json.dumps(
             {"error": "provider_operation_failed", "operation": error.operation},
@@ -60,7 +67,10 @@ def db_upgrade() -> None:
 @trial_app.command("start")
 def trial_start(start_at: str | None = typer.Option(default=None)) -> None:
     parsed = datetime.fromisoformat(start_at) if start_at is not None else None
-    trial = _services().trial.start(parsed)
+    try:
+        trial = _services().trial.start(parsed)
+    except LiveOperationsDisabledError as error:
+        _exit_provider_error(error)
     _write_result(
         {
             "trial_id": trial.id,
@@ -119,7 +129,7 @@ def provider_setup_webhook() -> None:
     url = f"{str(webhook_config.public_base_url).rstrip('/')}/webhooks/starkbank"
     try:
         webhook = build_client(settings).ensure_webhook(url)
-    except ProviderError as error:
+    except (ProviderError, LiveOperationsDisabledError) as error:
         _exit_provider_error(error)
     _write_result({"webhook_id": webhook.id, "url": webhook.url})
 
@@ -147,6 +157,40 @@ def provider_list_webhooks() -> None:
     )
 
 
+@provider_app.command("cleanup-webhooks")
+def provider_cleanup_webhooks(
+    *,
+    confirm_sandbox: Annotated[bool, typer.Option()] = False,
+) -> None:
+    settings = Settings()
+    if not settings.starkbank_sandbox_live_enabled or not confirm_sandbox:
+        raise typer.BadParameter(SANDBOX_CONFIRMATION_ERROR)
+    webhook_config = settings.webhook_config()
+    target_url = f"{str(webhook_config.public_base_url).rstrip('/')}/webhooks/starkbank"
+    client = build_client(settings)
+    try:
+        webhooks = client.list_webhooks()
+        matching = [webhook for webhook in webhooks if webhook.url == target_url]
+        valid = [webhook for webhook in matching if set(webhook.subscriptions) == {"invoice"}]
+        keep = valid[0] if valid else None
+        removed = 0
+        for webhook in webhooks:
+            if keep is not None and webhook.id == keep.id:
+                continue
+            client.delete_webhook(webhook.id)
+            removed += 1
+        if keep is None:
+            keep = client.ensure_webhook(target_url)
+    except (ProviderError, LiveOperationsDisabledError) as error:
+        _exit_provider_error(error)
+    typer.echo(
+        json.dumps(
+            {"active_url": keep.url, "removed": removed, "subscription": "invoice"},
+            sort_keys=True,
+        )
+    )
+
+
 @provider_app.command("smoke-invoice")
 def provider_smoke_invoice(
     *,
@@ -166,7 +210,7 @@ def provider_smoke_invoice(
     try:
         existing = client.find_invoice(draft.tag)
         invoice = existing if existing is not None else client.create_invoice(draft)
-    except ProviderError as error:
+    except (ProviderError, LiveOperationsDisabledError) as error:
         _exit_provider_error(error)
     typer.echo(
         json.dumps(
@@ -174,6 +218,35 @@ def provider_smoke_invoice(
                 "invoice_id": invoice.id,
                 "tag": invoice.tag,
                 "reused": existing is not None,
+            },
+            sort_keys=True,
+        )
+    )
+
+
+@provider_app.command("smoke-batch")
+def provider_smoke_batch(
+    *,
+    count: int = typer.Option(default=8, min=1, max=12),
+    confirm_sandbox: Annotated[bool, typer.Option()] = False,
+    reference: str = typer.Option(default="smoke-batch-1"),
+    amount_cents: int = typer.Option(default=10_000, min=1_000, max=100_000),
+) -> None:
+    settings = Settings()
+    if not settings.starkbank_sandbox_live_enabled or not confirm_sandbox:
+        raise typer.BadParameter(SANDBOX_CONFIRMATION_ERROR)
+    client = build_client(settings)
+    try:
+        result = SmokeBatchService(client, SystemClock()).run(reference, count, amount_cents)
+    except (ProviderError, LiveOperationsDisabledError) as error:
+        _exit_provider_error(error)
+    typer.echo(
+        json.dumps(
+            {
+                "count": len(result.invoices),
+                "reused": result.reused,
+                "invoice_ids": [invoice.id for invoice in result.invoices],
+                "reference": reference,
             },
             sort_keys=True,
         )

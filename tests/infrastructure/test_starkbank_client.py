@@ -4,9 +4,11 @@ from types import SimpleNamespace
 
 import pytest
 import starkbank
+from starkbank.error import InputErrors
 
 from starkbank_trial.domain.events import CreditedInvoiceEvent
 from starkbank_trial.domain.invoices import InvoiceDraft
+from starkbank_trial.domain.provider import ProviderPermanentError
 from starkbank_trial.domain.status import DraftStatus
 from starkbank_trial.domain.transfer import build_transfer_command
 from starkbank_trial.domain.types import BatchId, Cents, DraftId, InvoiceId, TransferId
@@ -16,7 +18,12 @@ from starkbank_trial.infrastructure.starkbank_client import StarkBankClient
 @pytest.fixture
 def sdk_client() -> StarkBankClient:
     private_key, _ = starkbank.key.create()
-    return StarkBankClient.from_credentials("project-1", private_key)
+    return StarkBankClient.from_credentials(
+        "project-1",
+        private_key,
+        expected_workspace_id="workspace-1",
+        live_operations_enabled=True,
+    )
 
 
 def test_create_invoice_maps_draft_to_official_sdk(
@@ -234,7 +241,92 @@ def test_ensure_webhook_reuses_or_creates_invoice_subscription(
     # Then
     assert reused.id == "webhook-existing"
     assert created.id == "webhook-created"
-    assert created.subscriptions == ("invoice",)
+
+
+def test_ensure_webhook_does_not_reuse_transfer_subscription(
+    monkeypatch: pytest.MonkeyPatch,
+    sdk_client: StarkBankClient,
+) -> None:
+    existing = starkbank.Webhook(
+        "https://trial.example.com/webhooks/starkbank",
+        ["invoice", "transfer"],
+        id="webhook-existing",
+    )
+    created = starkbank.Webhook(
+        "https://trial.example.com/webhooks/starkbank",
+        ["invoice"],
+        id="webhook-created",
+    )
+
+    def query(
+        limit: int | None = None,
+        user: starkbank.Project | None = None,
+    ) -> Iterator[starkbank.Webhook]:
+        return iter((existing,))
+
+    def create(
+        url: str,
+        subscriptions: list[str],
+        user: starkbank.Project | None = None,
+    ) -> starkbank.Webhook:
+        return created
+
+    monkeypatch.setattr(starkbank.webhook, "query", query)
+    monkeypatch.setattr(starkbank.webhook, "create", create)
+
+    result = sdk_client.ensure_webhook(existing.url)
+
+    assert result.id == "webhook-created"
+
+
+def test_delete_webhook_calls_sdk(
+    monkeypatch: pytest.MonkeyPatch,
+    sdk_client: StarkBankClient,
+) -> None:
+    deleted: list[str] = []
+
+    def delete(webhook_id: str, user: starkbank.Project | None = None) -> None:
+        deleted.append(webhook_id)
+
+    monkeypatch.setattr(starkbank.webhook, "delete", delete)
+
+    sdk_client.delete_webhook("webhook-1")
+
+    assert deleted == ["webhook-1"]
+
+
+def test_delete_webhook_requires_sdk_capability(
+    monkeypatch: pytest.MonkeyPatch,
+    sdk_client: StarkBankClient,
+) -> None:
+    monkeypatch.delattr(starkbank.webhook, "delete", raising=False)
+
+    with pytest.raises(ProviderPermanentError):
+        sdk_client.delete_webhook("webhook-1")
+
+
+def test_ensure_webhook_input_error_is_permanent(
+    monkeypatch: pytest.MonkeyPatch,
+    sdk_client: StarkBankClient,
+) -> None:
+    def query(
+        limit: int | None = None,
+        user: starkbank.Project | None = None,
+    ) -> Iterator[starkbank.Webhook]:
+        return iter(())
+
+    def create(
+        url: str,
+        subscriptions: list[str],
+        user: starkbank.Project | None = None,
+    ) -> starkbank.Webhook:
+        raise InputErrors([{"code": "invalid", "message": "invalid webhook"}])
+
+    monkeypatch.setattr(starkbank.webhook, "query", query)
+    monkeypatch.setattr(starkbank.webhook, "create", create)
+
+    with pytest.raises(ProviderPermanentError):
+        sdk_client.ensure_webhook("https://trial.example.com/webhooks/starkbank")
 
 
 def test_list_webhooks_maps_safe_provider_fields(

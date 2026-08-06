@@ -12,7 +12,11 @@ from starkbank_trial.application.webhooks import WebhookService
 from starkbank_trial.domain.constants import STARK_BANK_RECIPIENT
 from starkbank_trial.domain.events import CreditedInvoiceEvent, EventWriteResult, VerifiedEvent
 from starkbank_trial.domain.models import TransferCommand
-from starkbank_trial.domain.provider import ProviderTimeoutError, ProviderTransfer
+from starkbank_trial.domain.provider import (
+    ProviderTimeoutError,
+    ProviderTransfer,
+    ProviderTransientError,
+)
 from starkbank_trial.domain.status import TransferStatus
 from starkbank_trial.domain.types import Cents, EventId, ExternalId, InvoiceId, TransferId
 from starkbank_trial.logging import configure_logging
@@ -57,6 +61,9 @@ class RecordingTransferProvider:
             self.timeout_once = False
             raise ProviderTimeoutError(operation="create_transfer")
         return created
+
+    def find_transfer(self, command: TransferCommand) -> ProviderTransfer | None:
+        return self.remote.get(command.external_id)
 
 
 @pytest.fixture
@@ -159,3 +166,48 @@ def test_transfer_worker_persists_success_log(stores: Stores, tmp_path: Path) ->
     assert entry["event"] == "transfer_succeeded"
     assert entry["invoice_id"] == "invoice-1"
     assert entry["provider_transfer_id"] == "transfer-1"
+
+
+def test_transfer_retries_are_bounded_and_final_lookup_cannot_duplicate(
+    stores: Stores,
+) -> None:
+    @dataclass(slots=True)
+    class AlwaysTransientProvider:
+        commands: list[TransferCommand] = field(default_factory=list)
+
+        def ensure_transfer(self, command: TransferCommand) -> ProviderTransfer:
+            self.commands.append(command)
+            raise ProviderTransientError(operation="transfer.create")
+
+        def find_transfer(self, command: TransferCommand) -> ProviderTransfer | None:
+            return None
+
+    now = datetime(2026, 8, 1, 12, tzinfo=UTC)
+    clock = FixedClock(now)
+    webhook = WebhookService(FixedVerifier(credited_event()), stores.events, clock)
+    provider = AlwaysTransientProvider()
+    worker = TransferWorker(
+        stores.transfers,
+        provider,
+        clock,
+        retry_base_seconds=5,
+        transfer_max_attempts=3,
+    )
+    webhook.receive(b"payload", "signature")
+
+    for delay in (0, 5, 15):
+        clock.current = now + timedelta(seconds=delay)
+        worker.process_one()
+
+    with stores.transfers.engine.connect() as connection:
+        row = connection.execute(
+            select(
+                transfer_jobs.c.status,
+                transfer_jobs.c.attempts,
+                transfer_jobs.c.last_error_code,
+            )
+        ).one()
+    assert row.status == TransferStatus.PERMANENT_FAILURE
+    assert row.attempts == 3
+    assert row.last_error_code == "retry_exhausted"
+    assert len(provider.commands) == 3

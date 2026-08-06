@@ -26,6 +26,10 @@ proofs that move money in a public issue.
   availability during startup.
 - Provider-changing commands require `STARKBANK_SANDBOX_LIVE_ENABLED=true`; Invoice and trial
   commands additionally require an explicit Make confirmation.
+- The same flag is enforced in the application and Stark Bank client for Invoice, Transfer,
+  Webhook setup, trial start and worker claims.
+- Signed events are accepted only for the configured `STARKBANK_WORKSPACE_ID`; a valid event from
+  another workspace is acknowledged as `ignored_workspace` without persistence.
 
 ## Runtime hardening
 

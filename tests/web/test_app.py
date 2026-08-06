@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from flask.testing import FlaskClient
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine, create_engine, func, select
 
 from starkbank_trial.application.transfers import TransferWorker
 from starkbank_trial.application.trials import BatchCounts, TrialService
@@ -17,10 +17,14 @@ from starkbank_trial.config import Settings
 from starkbank_trial.domain.events import CreditedInvoiceEvent, VerifiedEvent
 from starkbank_trial.domain.invoices import InvoiceDraft, ProviderInvoice
 from starkbank_trial.domain.models import TransferCommand
-from starkbank_trial.domain.provider import InvalidWebhookError, ProviderTransfer
+from starkbank_trial.domain.provider import (
+    InvalidWebhookError,
+    ProviderTransfer,
+    UnexpectedWorkspaceError,
+)
 from starkbank_trial.domain.types import Cents, EventId, InvoiceId
 from starkbank_trial.http import create_app
-from starkbank_trial.persistence.schema import metadata
+from starkbank_trial.persistence.schema import metadata, webhook_events
 from starkbank_trial.persistence.stores import build_stores
 
 if TYPE_CHECKING:
@@ -39,6 +43,7 @@ class FixedClock:
 class FakeGateway:
     event: VerifiedEvent
     invalid: bool = False
+    foreign_workspace: bool = False
     transfers: list[TransferCommand] = field(default_factory=list)
 
     def create_invoice(self, draft: InvoiceDraft) -> ProviderInvoice:
@@ -51,9 +56,17 @@ class FakeGateway:
         self.transfers.append(command)
         raise NotImplementedError
 
+    def find_transfer(self, command: TransferCommand) -> ProviderTransfer | None:
+        return None
+
     def verify_event(self, content: bytes, signature: str) -> VerifiedEvent:
         if self.invalid:
             raise InvalidWebhookError(operation="verify_event")
+        if self.foreign_workspace:
+            raise UnexpectedWorkspaceError(
+                operation="verify_event",
+                workspace_id="workspace-foreign",
+            )
         return self.event
 
 
@@ -152,6 +165,25 @@ def test_webhook_rejects_invalid_signature(app_fixture: AppFixture) -> None:
     # Then
     assert response.status_code == 400
     assert response.get_json() == {"error": "invalid webhook"}
+
+
+def test_webhook_ignores_foreign_workspace_without_persisting(
+    app_fixture: AppFixture,
+) -> None:
+    app_fixture.gateway.foreign_workspace = True
+
+    response = app_fixture.client.post(
+        "/webhooks/starkbank",
+        data=b"payload",
+        headers={"Digital-Signature": "valid"},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == {"status": "ignored_workspace"}
+    with app_fixture.engine.connect() as connection:
+        assert (
+            connection.execute(select(func.count()).select_from(webhook_events)).scalar_one() == 0
+        )
 
 
 def test_webhook_enforces_body_limit(app_fixture: AppFixture) -> None:

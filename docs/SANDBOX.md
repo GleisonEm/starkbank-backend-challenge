@@ -26,6 +26,7 @@ Validate and idempotently create the Invoice webhook:
 make sandbox-check
 make webhook-setup
 make webhook-list
+make webhook-cleanup CONFIRM_SANDBOX=yes
 ```
 
 The registered endpoint must be exactly:
@@ -45,6 +46,7 @@ Create one deterministic Invoice before the 24-hour run:
 
 ```bash
 make smoke-invoice CONFIRM_SANDBOX=yes
+make smoke-batch COUNT=8 CONFIRM_SANDBOX=yes
 ```
 
 Retrying the command reuses the Invoice found by its stable tag instead of creating another one.
@@ -61,7 +63,7 @@ proof of a defect. For each accepted credit event, the database must contain one
 
 ## Start the 24-hour challenge
 
-Only after the webhook and smoke flow are healthy:
+Only after the webhook and accelerated smoke flow are healthy:
 
 ```bash
 make trial-start CONFIRM_SANDBOX=yes

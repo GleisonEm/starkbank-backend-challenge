@@ -28,6 +28,11 @@ require_setting PUBLIC_HOST "$PUBLIC_HOST"
 require_setting PUBLIC_BASE_URL "$PUBLIC_BASE_URL"
 require_setting POSTGRES_DB "$POSTGRES_DB"
 require_setting POSTGRES_USER "$POSTGRES_USER"
+workspace_id=$(config_value "$VPS_ENV_FILE" STARKBANK_WORKSPACE_ID)
+require_setting STARKBANK_WORKSPACE_ID "$workspace_id"
+case "$workspace_id" in
+    *[!0-9]*) fail "STARKBANK_WORKSPACE_ID must contain only digits" ;;
+esac
 
 case "$APP_IMAGE" in
     ghcr.io/gleisonem/starkbank-backend-challenge@sha256:*) ;;

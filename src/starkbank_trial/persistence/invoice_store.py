@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import Engine, func, insert, select, update
 from sqlalchemy.engine import Connection, RowMapping
@@ -14,7 +14,18 @@ from starkbank_trial.domain.status import BatchStatus, DraftStatus, TrialStatus
 from starkbank_trial.domain.types import BatchId, Cents, DraftId
 from starkbank_trial.persistence.schema import invoice_batches, invoice_drafts, trial_runs
 
-MAX_RECONCILIATION_ATTEMPTS = 3
+MAX_RECONCILIATION_ATTEMPTS = 5
+
+
+@dataclass(frozen=True, slots=True)
+class _DraftTransition:
+    draft_id: DraftId
+    status: DraftStatus
+    at: datetime
+    provider_invoice_id: str | None
+    error_code: str | None
+    next_attempt_at: datetime
+    reset_reconcile_attempts: bool = False
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -33,6 +44,7 @@ def _draft(row: RowMapping) -> InvoiceDraft:
         status=DraftStatus(str(row["status"])),
         attempts=int(row["attempts"]),
         created_at=_as_utc(row["created_at"]),
+        next_attempt_at=_as_utc(row["next_attempt_at"]),
     )
 
 
@@ -61,6 +73,7 @@ class InvoiceStore:
                     "reconcile_attempts": 0,
                     "created_at": draft.created_at,
                     "updated_at": draft.created_at,
+                    "next_attempt_at": draft.next_attempt_at or draft.created_at,
                 }
                 for draft in drafts
                 if draft.id not in existing
@@ -68,23 +81,29 @@ class InvoiceStore:
             if rows:
                 connection.execute(insert(invoice_drafts), rows)
 
-    def pending(self, batch_id: BatchId) -> tuple[InvoiceDraft, ...]:
+    def pending(self, batch_id: BatchId, now: datetime | None = None) -> tuple[InvoiceDraft, ...]:
+        effective_now = now or datetime.now(UTC)
         with self.engine.connect() as connection:
             rows = connection.execute(
                 select(invoice_drafts)
                 .where(
                     invoice_drafts.c.batch_id == batch_id,
                     invoice_drafts.c.status == DraftStatus.PENDING,
+                    invoice_drafts.c.next_attempt_at <= effective_now,
                 )
                 .order_by(invoice_drafts.c.ordinal)
             ).mappings()
             return tuple(_draft(row) for row in rows)
 
-    def unknown(self, limit: int = 100) -> tuple[InvoiceDraft, ...]:
+    def unknown(self, now: datetime | None = None, limit: int = 100) -> tuple[InvoiceDraft, ...]:
+        effective_now = now or datetime.now(UTC)
         with self.engine.connect() as connection:
             rows = connection.execute(
                 select(invoice_drafts)
-                .where(invoice_drafts.c.status == DraftStatus.UNKNOWN)
+                .where(
+                    invoice_drafts.c.status == DraftStatus.UNKNOWN,
+                    invoice_drafts.c.next_attempt_at <= effective_now,
+                )
                 .order_by(invoice_drafts.c.updated_at)
                 .limit(limit)
             ).mappings()
@@ -92,41 +111,76 @@ class InvoiceStore:
 
     def created(self, result: DraftCreated) -> None:
         self._transition(
-            result.draft_id,
-            DraftStatus.CREATED,
-            result.at,
-            provider_invoice_id=result.invoice_id,
-            error_code=None,
+            _DraftTransition(
+                result.draft_id,
+                DraftStatus.CREATED,
+                result.at,
+                result.invoice_id,
+                None,
+                result.at,
+                reset_reconcile_attempts=True,
+            )
         )
 
     def unknown_result(self, result: DraftFailure) -> None:
         self._transition(
-            result.draft_id,
-            DraftStatus.UNKNOWN,
-            result.at,
-            provider_invoice_id=None,
-            error_code=result.error_code,
+            _DraftTransition(
+                result.draft_id,
+                DraftStatus.UNKNOWN,
+                result.at,
+                None,
+                result.error_code,
+                result.at,
+            )
         )
 
-    def retry(self, result: DraftFailure) -> None:
-        self._transition(
-            result.draft_id,
-            DraftStatus.PENDING,
-            result.at,
-            provider_invoice_id=None,
-            error_code=result.error_code,
-        )
+    def retry(self, result: DraftFailure, delay: timedelta, max_attempts: int) -> bool:
+        with self.engine.begin() as connection:
+            attempts = (
+                int(
+                    connection.execute(
+                        select(invoice_drafts.c.attempts).where(
+                            invoice_drafts.c.id == result.draft_id
+                        )
+                    ).scalar_one()
+                )
+                + 1
+            )
+            exhausted = attempts >= max_attempts
+            connection.execute(
+                update(invoice_drafts)
+                .where(invoice_drafts.c.id == result.draft_id)
+                .values(
+                    status=DraftStatus.FAILED if exhausted else DraftStatus.PENDING,
+                    provider_invoice_id=None,
+                    attempts=attempts,
+                    last_error_code="retry_exhausted" if exhausted else result.error_code,
+                    next_attempt_at=result.at if exhausted else result.at + delay,
+                    updated_at=result.at,
+                )
+            )
+        return not exhausted
 
     def failed(self, result: DraftFailure) -> None:
         self._transition(
-            result.draft_id,
-            DraftStatus.FAILED,
-            result.at,
-            provider_invoice_id=None,
-            error_code=result.error_code,
+            _DraftTransition(
+                result.draft_id,
+                DraftStatus.FAILED,
+                result.at,
+                None,
+                result.error_code,
+                result.at,
+            )
         )
 
-    def reconcile(self, result: InvoiceReconciliation) -> None:
+    def reconcile(
+        self,
+        result: InvoiceReconciliation,
+        *,
+        max_attempts: int,
+        max_reconciliation_attempts: int = MAX_RECONCILIATION_ATTEMPTS,
+        retry_delay: timedelta = timedelta(seconds=5),
+    ) -> None:
         if result.provider_invoice is not None:
             self.created(DraftCreated(result.draft.id, result.provider_invoice.id, result.at))
             return
@@ -139,15 +193,20 @@ class InvoiceStore:
             next_attempts = int(attempts) + 1
             next_status = (
                 DraftStatus.PENDING
-                if next_attempts >= MAX_RECONCILIATION_ATTEMPTS
+                if next_attempts >= max_reconciliation_attempts
                 else DraftStatus.UNKNOWN
+            )
+            exhausted = (
+                next_status is DraftStatus.PENDING and int(result.draft.attempts) >= max_attempts
             )
             connection.execute(
                 update(invoice_drafts)
                 .where(invoice_drafts.c.id == result.draft.id)
                 .values(
-                    status=next_status,
-                    reconcile_attempts=next_attempts,
+                    status=DraftStatus.FAILED if exhausted else next_status,
+                    reconcile_attempts=0 if next_status is DraftStatus.PENDING else next_attempts,
+                    last_error_code="retry_exhausted" if exhausted else "reconciliation_not_found",
+                    next_attempt_at=result.at if exhausted else result.at + retry_delay,
                     updated_at=result.at,
                 )
             )
@@ -189,23 +248,20 @@ class InvoiceStore:
 
     def _transition(
         self,
-        draft_id: DraftId,
-        status: DraftStatus,
-        at: datetime,
-        *,
-        provider_invoice_id: str | None,
-        error_code: str | None,
+        transition: _DraftTransition,
     ) -> None:
         with self.engine.begin() as connection:
             connection.execute(
                 update(invoice_drafts)
-                .where(invoice_drafts.c.id == draft_id)
+                .where(invoice_drafts.c.id == transition.draft_id)
                 .values(
-                    status=status,
-                    provider_invoice_id=provider_invoice_id,
+                    status=transition.status,
+                    provider_invoice_id=transition.provider_invoice_id,
                     attempts=invoice_drafts.c.attempts + 1,
-                    last_error_code=error_code,
-                    updated_at=at,
+                    last_error_code=transition.error_code,
+                    next_attempt_at=transition.next_attempt_at,
+                    **({"reconcile_attempts": 0} if transition.reset_reconcile_attempts else {}),
+                    updated_at=transition.at,
                 )
             )
 

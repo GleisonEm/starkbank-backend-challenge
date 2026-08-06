@@ -22,7 +22,8 @@ env_value() {
 [ -f "$ENV_FILE" ] || fail "missing .env; run make env-init"
 
 for key in COMPOSE_PROJECT_NAME POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD \
-    STARKBANK_ENVIRONMENT STARKBANK_PROJECT_ID LOCAL_STARKBANK_PRIVATE_KEY_FILE; do
+    STARKBANK_ENVIRONMENT STARKBANK_PROJECT_ID STARKBANK_WORKSPACE_ID \
+    LOCAL_STARKBANK_PRIVATE_KEY_FILE; do
     value=$(env_value "$key")
     [ -n "$value" ] || fail "$key is required in .env"
 done
@@ -35,6 +36,10 @@ done
 project_id=$(env_value STARKBANK_PROJECT_ID)
 case "$project_id" in
     *[!0-9]*) fail "STARKBANK_PROJECT_ID must contain only digits" ;;
+esac
+workspace_id=$(env_value STARKBANK_WORKSPACE_ID)
+case "$workspace_id" in
+    ''|*[!0-9]*) fail "STARKBANK_WORKSPACE_ID must contain only digits" ;;
 esac
 
 key_file=$(env_value LOCAL_STARKBANK_PRIVATE_KEY_FILE)

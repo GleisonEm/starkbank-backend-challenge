@@ -79,6 +79,12 @@ STARKBANK_PRIVATE_KEY_PEM
 POSTGRES_PASSWORD
 ```
 
+Add the confirmed Sandbox Workspace as a non-secret Environment variable:
+
+```text
+STARKBANK_WORKSPACE_ID
+```
+
 Create a dedicated SSH key for the workflow and add its public half to the selected VPS account.
 Store the private half as a secret and the verified host key as an Environment variable:
 

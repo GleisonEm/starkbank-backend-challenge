@@ -38,6 +38,7 @@ def test_settings_builds_provider_credentials_without_public_url(tmp_path: Path)
         {
             "DATABASE_URL": "sqlite+pysqlite:///:memory:",
             "STARKBANK_PROJECT_ID": "project-1",
+            "STARKBANK_WORKSPACE_ID": "workspace-1",
             "STARKBANK_PRIVATE_KEY_FILE": key_file,
         }
     )

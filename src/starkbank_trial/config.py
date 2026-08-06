@@ -11,6 +11,7 @@ class ProviderCredentials(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     project_id: str
+    workspace_id: str
     private_key_file: Path
 
 
@@ -38,6 +39,7 @@ class Settings(BaseSettings):
         default="sandbox", alias="STARKBANK_ENVIRONMENT"
     )
     starkbank_project_id: str | None = Field(default=None, alias="STARKBANK_PROJECT_ID")
+    starkbank_workspace_id: str | None = Field(default=None, alias="STARKBANK_WORKSPACE_ID")
     starkbank_private_key_file: Path | None = Field(
         default=None, alias="STARKBANK_PRIVATE_KEY_FILE"
     )
@@ -54,6 +56,11 @@ class Settings(BaseSettings):
     worker_lease_seconds: int = Field(default=120, gt=0, alias="WORKER_LEASE_SECONDS")
     batch_lease_seconds: int = Field(default=300, gt=0, alias="BATCH_LEASE_SECONDS")
     retry_base_seconds: int = Field(default=5, gt=0, alias="RETRY_BASE_SECONDS")
+    invoice_max_attempts: int = Field(default=5, ge=1, alias="INVOICE_MAX_ATTEMPTS")
+    invoice_reconciliation_max_attempts: int = Field(
+        default=5, ge=1, alias="INVOICE_RECONCILIATION_MAX_ATTEMPTS"
+    )
+    transfer_max_attempts: int = Field(default=10, ge=1, alias="TRANSFER_MAX_ATTEMPTS")
 
     def provider_credentials(self) -> ProviderCredentials:
         project_id = self.starkbank_project_id
@@ -62,14 +69,17 @@ class Settings(BaseSettings):
             name
             for name, value in (
                 ("STARKBANK_PROJECT_ID", project_id),
+                ("STARKBANK_WORKSPACE_ID", self.starkbank_workspace_id),
                 ("STARKBANK_PRIVATE_KEY_FILE", private_key_file),
             )
             if value is None
         )
-        if project_id is None or private_key_file is None:
+        workspace_id = self.starkbank_workspace_id
+        if project_id is None or workspace_id is None or private_key_file is None:
             raise MissingProviderConfigurationError(missing_fields=missing)
         return ProviderCredentials(
             project_id=project_id,
+            workspace_id=workspace_id,
             private_key_file=private_key_file,
         )
 
