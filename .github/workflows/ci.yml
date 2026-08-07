@@ -86,9 +86,9 @@ jobs:
           sudo install -m 0644 -o root -g root /tmp/starkbank-vps.env \
             /etc/starkbank-trial/vps.env
           sudo ./infra/vps/configure-review-api.sh false
-          grep --quiet '^REVIEW_API_ENABLED=false$$' /etc/starkbank-trial/vps.env
+          sudo grep --quiet '^REVIEW_API_ENABLED=false$$' /etc/starkbank-trial/vps.env
           sudo ./infra/vps/configure-review-api.sh true
-          grep --quiet '^REVIEW_API_ENABLED=true$$' /etc/starkbank-trial/vps.env
+          sudo grep --quiet '^REVIEW_API_ENABLED=true$$' /etc/starkbank-trial/vps.env
           secret_input=$(mktemp -d)
           trap 'rm -rf "$secret_input"' EXIT HUP INT TERM
           printf '123456789' > "$secret_input/project-id"
