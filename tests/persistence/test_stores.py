@@ -3,8 +3,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, insert, select
+from sqlalchemy import create_engine, func, insert, select
 
+from starkbank_trial.application.payers import build_smoke_invoice
 from starkbank_trial.application.schedule import build_schedule
 from starkbank_trial.domain.events import (
     CreditedInvoiceEvent,
@@ -25,6 +26,11 @@ def stores(tmp_path: Path) -> Iterator[Stores]:
     metadata.create_all(engine)
     yield build_stores(engine)
     engine.dispose()
+
+
+def register_owned_invoice(stores: Stores, invoice_id: str = "invoice-1") -> None:
+    draft = build_smoke_invoice("owned-1", 10_000, datetime(2026, 8, 1, 12, tzinfo=UTC))
+    stores.invoices.record_smoke(draft, invoice_id, datetime(2026, 8, 1, 12, tzinfo=UTC))
 
 
 def test_trial_store_creates_and_claims_the_first_due_batch(stores: Stores) -> None:
@@ -48,6 +54,7 @@ def test_trial_store_creates_and_claims_the_first_due_batch(stores: Stores) -> N
 
 def test_event_store_persists_one_job_for_duplicate_event(stores: Stores) -> None:
     # Given
+    register_owned_invoice(stores)
     received_at = datetime(2026, 8, 1, 12, tzinfo=UTC)
     event = CreditedInvoiceEvent(
         event_id=EventId("event-1"),
@@ -84,6 +91,7 @@ def test_event_store_persists_one_job_for_duplicate_event(stores: Stores) -> Non
 
 def test_event_store_deduplicates_new_event_for_same_invoice(stores: Stores) -> None:
     # Given
+    register_owned_invoice(stores)
     received_at = datetime(2026, 8, 1, 12, tzinfo=UTC)
     first_event = CreditedInvoiceEvent(
         event_id=EventId("event-1"),
@@ -106,6 +114,59 @@ def test_event_store_deduplicates_new_event_for_same_invoice(stores: Stores) -> 
 
     # Then
     assert result is EventWriteResult.DUPLICATE_INVOICE
+
+
+def test_event_store_ignores_credit_for_invoice_created_by_other_environment(
+    stores: Stores,
+) -> None:
+    # Given: the invoice was NOT registered in this environment (another
+    # environment created it in the shared Sandbox workspace).
+    received_at = datetime(2026, 8, 1, 12, tzinfo=UTC)
+    foreign = CreditedInvoiceEvent(
+        event_id=EventId("event-foreign-invoice"),
+        invoice_id=InvoiceId("invoice-foreign"),
+        amount=Cents(10_000),
+        fee=Cents(50),
+        workspace_id="workspace-1",
+    )
+
+    # When
+    outcome = stores.events.record(EventRecord(foreign, "f" * 64, received_at, Cents(9_950)))
+
+    # Then: audited as invoice_unknown, no transfer job is created.
+    assert outcome is EventWriteResult.INVOICE_UNKNOWN
+    with stores.transfers.engine.connect() as connection:
+        job = connection.execute(select(func.count()).select_from(transfer_jobs)).scalar_one()
+    assert job == 0
+    with stores.transfers.engine.connect() as connection:
+        stored = connection.execute(
+            select(webhook_events.c.outcome).where(webhook_events.c.id == "event-foreign-invoice")
+        ).scalar_one()
+    assert stored == EventWriteResult.INVOICE_UNKNOWN
+
+
+def test_event_store_queues_credit_for_invoice_created_by_this_environment(
+    stores: Stores,
+) -> None:
+    # Given
+    register_owned_invoice(stores, invoice_id="invoice-owned")
+    received_at = datetime(2026, 8, 1, 12, tzinfo=UTC)
+    owned = CreditedInvoiceEvent(
+        event_id=EventId("event-owned"),
+        invoice_id=InvoiceId("invoice-owned"),
+        amount=Cents(10_000),
+        fee=Cents(50),
+        workspace_id="workspace-1",
+    )
+
+    # When
+    outcome = stores.events.record(EventRecord(owned, "o" * 64, received_at, Cents(9_950)))
+
+    # Then
+    assert outcome is EventWriteResult.QUEUED
+    with stores.transfers.engine.connect() as connection:
+        job = connection.execute(select(func.count()).select_from(transfer_jobs)).scalar_one()
+    assert job == 1
 
 
 def test_event_store_applies_new_transfer_status_and_ignores_stale_event(stores: Stores) -> None:

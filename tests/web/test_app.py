@@ -10,6 +10,7 @@ from flask.testing import FlaskClient
 from sqlalchemy import Engine, create_engine, select
 from sqlalchemy.exc import SQLAlchemyError
 
+from starkbank_trial.application.payers import build_smoke_invoice
 from starkbank_trial.application.transfers import TransferWorker
 from starkbank_trial.application.trials import BatchCounts, TrialService
 from starkbank_trial.application.webhooks import WebhookService
@@ -103,6 +104,11 @@ def app_fixture(tmp_path: Path) -> Iterator[AppFixture]:
         amount=Cents(10_000),
         fee=Cents(50),
         workspace_id="workspace-1",
+    )
+    stores.invoices.record_smoke(
+        build_smoke_invoice("owned-1", 10_000, datetime(2026, 8, 1, 12, tzinfo=UTC)),
+        "invoice-1",
+        datetime(2026, 8, 1, 12, tzinfo=UTC),
     )
     gateway = FakeGateway(event)
     clock: Clock = FixedClock(datetime(2026, 8, 1, 12, tzinfo=UTC))

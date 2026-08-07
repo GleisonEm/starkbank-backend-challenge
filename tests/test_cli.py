@@ -27,6 +27,7 @@ from starkbank_trial.domain.provider import (
     WebhookInspection,
 )
 from starkbank_trial.domain.types import EventId, InvoiceId, TransferId
+from starkbank_trial.persistence.invoice_store import InvoiceStore
 from starkbank_trial.persistence.schema import metadata
 from starkbank_trial.persistence.stores import build_stores
 
@@ -333,6 +334,7 @@ def test_provider_smoke_invoice_requires_explicit_live_opt_in(
 
 def test_provider_smoke_invoice_creates_deterministic_safe_invoice(
     monkeypatch: pytest.MonkeyPatch,
+    services: Services,
 ) -> None:
     # Given
     gateway = FakeGateway()
@@ -341,7 +343,11 @@ def test_provider_smoke_invoice_creates_deterministic_safe_invoice(
     def fixed_client(settings: Settings) -> FakeGateway:
         return gateway
 
+    def fixed_store() -> InvoiceStore:
+        return services.stores.invoices
+
     monkeypatch.setattr(cli_module, "build_client", fixed_client)
+    monkeypatch.setattr(cli_module, "_invoice_store", fixed_store)
 
     # When
     result = CliRunner().invoke(

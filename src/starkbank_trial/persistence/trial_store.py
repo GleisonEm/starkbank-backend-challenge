@@ -5,6 +5,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 from sqlalchemy import Engine, func, insert, or_, select, update
 from sqlalchemy.engine import Connection
 
+from starkbank_trial.domain.constants import SMOKE_RUN_ID
 from starkbank_trial.domain.status import BatchStatus, TrialStatus
 from starkbank_trial.domain.trials import (
     BatchClaim,
@@ -37,7 +38,10 @@ class TrialStore:
         with self.engine.connect() as connection:
             trial = (
                 connection.execute(
-                    select(trial_runs).order_by(trial_runs.c.created_at.desc()).limit(1)
+                    select(trial_runs)
+                    .where(trial_runs.c.id != SMOKE_RUN_ID)
+                    .order_by(trial_runs.c.created_at.desc())
+                    .limit(1)
                 )
                 .mappings()
                 .first()

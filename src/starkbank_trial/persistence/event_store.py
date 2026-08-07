@@ -16,7 +16,7 @@ from starkbank_trial.domain.events import (
 from starkbank_trial.domain.status import TransferStatus
 from starkbank_trial.domain.transfer import build_transfer_command
 from starkbank_trial.domain.types import Cents, EventId
-from starkbank_trial.persistence.schema import transfer_jobs, webhook_events
+from starkbank_trial.persistence.schema import invoice_drafts, transfer_jobs, webhook_events
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +32,8 @@ class EventStore:
                 return EventWriteResult.DUPLICATE_EVENT
             if isinstance(record.event, IgnoredEvent) or record.net_amount is None:
                 return outcome
+            if not self._owns_invoice(connection, record.event.invoice_id):
+                return self._mark_invoice_unknown(connection, record.event.event_id)
             return self._queue_transfer(
                 connection,
                 record.event,
@@ -168,3 +170,23 @@ class EventStore:
             .values(outcome=EventWriteResult.DUPLICATE_INVOICE)
         )
         return EventWriteResult.DUPLICATE_INVOICE
+
+    @staticmethod
+    def _owns_invoice(connection: Connection, invoice_id: str) -> bool:
+        return (
+            connection.execute(
+                select(invoice_drafts.c.id).where(
+                    invoice_drafts.c.provider_invoice_id == invoice_id
+                )
+            ).first()
+            is not None
+        )
+
+    @staticmethod
+    def _mark_invoice_unknown(connection: Connection, event_id: EventId) -> EventWriteResult:
+        connection.execute(
+            update(webhook_events)
+            .where(webhook_events.c.id == event_id)
+            .values(outcome=EventWriteResult.INVOICE_UNKNOWN)
+        )
+        return EventWriteResult.INVOICE_UNKNOWN

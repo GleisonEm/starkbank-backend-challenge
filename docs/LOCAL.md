@@ -91,25 +91,28 @@ The Quick Tunnel runs inside Compose and does not require a Cloudflare account o
 temporary and is not used on the VPS. Ngrok is an alternative, but normally requires an account
 and authtoken.
 
-## One environment, one Sandbox workspace
+## Sharing a Sandbox workspace safely
 
 Stark Bank delivers every event to **all webhooks registered in the workspace** where the
-operation happened, and it retries failed deliveries. If two applications (for example, this
-local clone and the VPS deployment) run at the same time against the **same Project and
-Workspace**, they both receive every invoice and transfer event of that workspace. Each worker
-then queues transfers for invoices it never created, and retries can arrive long after the
-original event.
+operation happened, and it retries failed deliveries. Two applications (for example, this
+local clone and the VPS deployment) can therefore run at the same time against the **same
+Project and Workspace** without interfering: each environment only queues transfers for
+invoices it created (trial drafts and smoke invoices are registered in its own database), and
+credits for unknown invoices are stored as `invoice_unknown` audit records instead of
+transfers. See [`SANDBOX.md`](SANDBOX.md) "Shared workspace" for the exact behavior.
 
-Keep each running environment isolated:
+Keep in mind:
 
-- Use one Sandbox Project/Workspace **per environment** (local, VPS, reviewer).
-- To test locally with real credentials, create a separate Sandbox Project/Workspace in the
-  Stark Bank dashboard and upload only `secrets/public-key.pem` to it.
-- Never point two running instances at the same `STARKBANK_PROJECT_ID` +
-  `STARKBANK_WORKSPACE_ID`.
-- If you must share a workspace (for example, to validate a local build before deploy), stop
-  the other environment first, and remove the test events before starting it again — see
-  [`SANDBOX.md`](SANDBOX.md) "Clean up after local experiments".
+- Each environment still needs its own database; never point two clones at the same
+  PostgreSQL.
+- `PUBLIC_BASE_URL` and the registered webhook are per environment — the Quick Tunnel URL
+  changes every session, so re-run `make tunnel-url` and `make webhook-setup` when it changes.
+- If a local test created invoices you want fully removed from the workspace's event history,
+  use `provider cleanup-events` from [`SANDBOX.md`](SANDBOX.md) — this is optional maintenance,
+  not a requirement, since unknown-credit filtering already prevents double transfers.
+- A separate Project/Workspace per environment is still the cleanest setup when you have
+  permission to create one; sharing is only needed when it is not available (for example, the
+  Sandbox account may not allow creating extra workspaces).
 
 ## Logs and shutdown
 

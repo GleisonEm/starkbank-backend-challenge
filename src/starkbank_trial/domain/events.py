@@ -55,6 +55,7 @@ class EventWriteResult(StrEnum):
     REJECTED = "rejected"
     DUPLICATE_EVENT = "duplicate_event"
     DUPLICATE_INVOICE = "duplicate_invoice"
+    INVOICE_UNKNOWN = "invoice_unknown"
     TRANSFER_UPDATED = "transfer_updated"
     TRANSFER_UNMATCHED = "transfer_unmatched"
     TRANSFER_STALE = "transfer_stale"

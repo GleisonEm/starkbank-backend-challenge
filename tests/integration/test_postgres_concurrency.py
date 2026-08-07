@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import func, select
 
+from starkbank_trial.application.payers import build_smoke_invoice
 from starkbank_trial.domain.events import CreditedInvoiceEvent, EventRecord, EventWriteResult
 from starkbank_trial.domain.jobs import JobClaim
 from starkbank_trial.domain.types import Cents, EventId, InvoiceId
@@ -22,7 +23,13 @@ def postgres_stores() -> Iterator[Stores]:
     engine = build_engine(database_url)
     metadata.drop_all(engine)
     metadata.create_all(engine)
-    yield build_stores(engine)
+    stores = build_stores(engine)
+    stores.invoices.record_smoke(
+        build_smoke_invoice("owned-1", 10_000, datetime(2026, 8, 1, 12, tzinfo=UTC)),
+        "invoice-1",
+        datetime(2026, 8, 1, 12, tzinfo=UTC),
+    )
+    yield stores
     metadata.drop_all(engine)
     engine.dispose()
 

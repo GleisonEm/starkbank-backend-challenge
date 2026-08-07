@@ -8,6 +8,7 @@ from sqlalchemy import Engine, and_, func, or_, select
 from sqlalchemy.engine import Connection, RowMapping
 from sqlalchemy.sql import ColumnElement, Select
 
+from starkbank_trial.domain.constants import SMOKE_RUN_ID
 from starkbank_trial.persistence.schema import (
     invoice_batches,
     invoice_drafts,
@@ -395,7 +396,7 @@ class ReviewStore:
 
     @staticmethod
     def _trial_row(connection: Connection, trial_id: str | None) -> ReviewRow | None:
-        statement = select(trial_runs)
+        statement = select(trial_runs).where(trial_runs.c.id != SMOKE_RUN_ID)
         if trial_id is not None:
             statement = statement.where(trial_runs.c.id == trial_id)
         return (

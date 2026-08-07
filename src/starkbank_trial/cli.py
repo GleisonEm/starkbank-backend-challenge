@@ -22,6 +22,8 @@ from starkbank_trial.domain.errors import LiveOperationsDisabledError
 from starkbank_trial.domain.provider import ProviderError
 from starkbank_trial.domain.transfer import build_transfer_command
 from starkbank_trial.logging import configure_logging
+from starkbank_trial.persistence.engine import build_engine
+from starkbank_trial.persistence.invoice_store import InvoiceStore
 from starkbank_trial.persistence.review_store import ReviewStore
 
 logger = structlog.get_logger()
@@ -47,6 +49,11 @@ def _services() -> Services:
     settings = Settings()
     configure_logging(settings.log_level, settings.log_file)
     return build_services(settings)
+
+
+def _invoice_store() -> InvoiceStore:
+    settings = Settings()
+    return InvoiceStore(build_engine(settings.database_url))
 
 
 def _write_result(result: StrEnum | dict[str, object]) -> None:
@@ -284,6 +291,7 @@ def provider_smoke_invoice(
         )
         raise typer.BadParameter(message)
     client = build_client(settings)
+    stores = _invoice_store()
     stable_reference = str(uuid5(NAMESPACE_URL, reference))
     draft = build_smoke_invoice(stable_reference, amount_cents, datetime.now(UTC))
     try:
@@ -291,6 +299,7 @@ def provider_smoke_invoice(
         invoice = existing if existing is not None else client.create_invoice(draft)
     except (ProviderError, LiveOperationsDisabledError) as error:
         _exit_provider_error(error)
+    stores.record_smoke(draft, str(invoice.id), datetime.now(UTC))
     typer.echo(
         json.dumps(
             {
@@ -316,7 +325,11 @@ def provider_smoke_batch(
         raise typer.BadParameter(SANDBOX_CONFIRMATION_ERROR)
     client = build_client(settings)
     try:
-        result = SmokeBatchService(client, SystemClock()).run(reference, count, amount_cents)
+        result = SmokeBatchService(
+            client,
+            SystemClock(),
+            invoice_store=_invoice_store(),
+        ).run(reference, count, amount_cents)
     except (ProviderError, LiveOperationsDisabledError) as error:
         _exit_provider_error(error)
     typer.echo(

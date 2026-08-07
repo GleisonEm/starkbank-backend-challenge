@@ -40,12 +40,28 @@ Unsigned health probes or hand-written POST requests are expected to log `missin
 `invalid_signature_or_payload`; a real Stark Bank event must include `Digital-Signature` and be
 validated from its raw bytes.
 
+## Shared workspace: each environment only processes what it created
+
+Events are delivered to every webhook of the workspace, so two environments using the same
+Project/Workspace receive the same events. To keep them isolated without stopping either one,
+each environment only queues transfers for invoices **it** created:
+
+- Trial invoices are registered in the local database (`invoice_drafts`) before they are
+  issued; the webhook looks up the invoice id before queueing a transfer.
+- `smoke-invoice` and `smoke-batch` register the invoices they create in the local database.
+- A credit event for an invoice that this environment does not know is persisted with the
+  outcome `invoice_unknown` and never queues a transfer — it becomes part of the audit trail
+  only.
+
+This means the VPS and a local clone can run at the same time against the same Sandbox
+workspace without double transfers: each worker only ever transfers invoices its own database
+created.
+
 ## Clean up after local experiments
 
-Events are delivered to every webhook of the workspace, and Stark Bank retries failed
-deliveries. If a local test created invoices or transfers in a workspace that another
-environment also uses, delete the events of that test window **before** the other environment
-processes them — otherwise its worker will queue transfers for invoices it never created.
+Stark Bank retries failed webhook deliveries. If a local test created invoices or transfers in
+a workspace that another environment also uses, you can remove the notification events of that
+test window from the provider — this prevents a stopped environment from receiving them late.
 
 ```bash
 make webhook-list

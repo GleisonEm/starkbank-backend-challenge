@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import create_engine, select
 
+from starkbank_trial.application.payers import build_smoke_invoice
 from starkbank_trial.application.transfers import TransferWorker, WorkerResult
 from starkbank_trial.application.webhooks import WebhookService
 from starkbank_trial.domain.constants import STARK_BANK_RECIPIENT
@@ -89,8 +90,14 @@ def credited_event(*, amount: int = 10_000, fee: int = 50) -> CreditedInvoiceEve
     )
 
 
+def register_owned_invoice(stores: Stores, invoice_id: str = "invoice-1") -> None:
+    draft = build_smoke_invoice("owned-1", 10_000, datetime(2026, 8, 1, 12, tzinfo=UTC))
+    stores.invoices.record_smoke(draft, invoice_id, datetime(2026, 8, 1, 12, tzinfo=UTC))
+
+
 def test_credited_webhook_queues_exactly_one_net_transfer(stores: Stores) -> None:
     # Given
+    register_owned_invoice(stores)
     now = datetime(2026, 8, 1, 12, tzinfo=UTC)
     clock = FixedClock(now)
     webhook = WebhookService(FixedVerifier(credited_event()), stores.events, clock)
@@ -135,6 +142,7 @@ def test_invalid_net_amount_is_audited_without_transfer(stores: Stores) -> None:
 
 def test_timeout_reconciles_remote_transfer_without_duplicate(stores: Stores) -> None:
     # Given
+    register_owned_invoice(stores)
     now = datetime(2026, 8, 1, 12, tzinfo=UTC)
     clock = FixedClock(now)
     webhook = WebhookService(FixedVerifier(credited_event()), stores.events, clock)
@@ -155,6 +163,7 @@ def test_timeout_reconciles_remote_transfer_without_duplicate(stores: Stores) ->
 
 def test_transfer_worker_persists_success_log(stores: Stores, tmp_path: Path) -> None:
     # Given
+    register_owned_invoice(stores)
     log_file = tmp_path / "logs" / "worker.jsonl"
     configure_logging("info", log_file)
     clock = FixedClock(datetime(2026, 8, 1, 12, tzinfo=UTC))
@@ -188,6 +197,7 @@ def test_transfer_retries_are_bounded_and_final_lookup_cannot_duplicate(
             return None
 
     now = datetime(2026, 8, 1, 12, tzinfo=UTC)
+    register_owned_invoice(stores)
     clock = FixedClock(now)
     webhook = WebhookService(FixedVerifier(credited_event()), stores.events, clock)
     provider = AlwaysTransientProvider()

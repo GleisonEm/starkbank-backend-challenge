@@ -4,6 +4,7 @@ from starkbank_trial.application.clock import Clock
 from starkbank_trial.application.payers import build_smoke_invoice
 from starkbank_trial.domain.invoices import ProviderInvoice
 from starkbank_trial.domain.provider import InvoiceProvider, ProviderUnknownOutcomeError
+from starkbank_trial.persistence.invoice_store import InvoiceStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,6 +17,7 @@ class SmokeBatchResult:
 class SmokeBatchService:
     provider: InvoiceProvider
     clock: Clock
+    invoice_store: InvoiceStore | None = None
 
     def run(self, reference: str, count: int, amount: int) -> SmokeBatchResult:
         invoices: list[ProviderInvoice] = []
@@ -28,10 +30,13 @@ class SmokeBatchService:
                 reused += 1
                 continue
             try:
-                invoices.append(self.provider.create_invoice(draft))
+                created = self.provider.create_invoice(draft)
             except ProviderUnknownOutcomeError:
                 reconciled = self.provider.find_invoice(draft.tag)
                 if reconciled is None:
                     raise
-                invoices.append(reconciled)
+                created = reconciled
+            invoices.append(created)
+            if self.invoice_store is not None:
+                self.invoice_store.record_smoke(draft, str(created.id), self.clock.now())
         return SmokeBatchResult(tuple(invoices), reused)

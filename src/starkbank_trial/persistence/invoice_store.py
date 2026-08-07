@@ -1,9 +1,13 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import Engine, func, insert, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection, RowMapping
 
+from starkbank_trial.domain.constants import SMOKE_BATCH_ID, SMOKE_RUN_ID
 from starkbank_trial.domain.invoices import (
     DraftCreated,
     DraftFailure,
@@ -30,6 +34,12 @@ class _DraftTransition:
 
 def _as_utc(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _conflict_aware_insert(dialect_name: str, table: Any) -> Any:  # noqa: ANN401
+    if dialect_name == "postgresql":
+        return pg_insert(table)
+    return sqlite_insert(table)
 
 
 def _draft(row: RowMapping) -> InvoiceDraft:
@@ -80,6 +90,52 @@ class InvoiceStore:
             ]
             if rows:
                 connection.execute(insert(invoice_drafts), rows)
+
+    def record_smoke(self, draft: InvoiceDraft, provider_invoice_id: str, at: datetime) -> None:
+        with self.engine.begin() as connection:
+            upsert = _conflict_aware_insert(self.engine.dialect.name, trial_runs)
+            connection.execute(
+                upsert.values(
+                    id=SMOKE_RUN_ID,
+                    status=TrialStatus.COMPLETED,
+                    started_at=at,
+                    ends_at=at,
+                    created_at=at,
+                    active_marker=None,
+                ).on_conflict_do_nothing(index_elements=[trial_runs.c.id])
+            )
+            upsert = _conflict_aware_insert(self.engine.dialect.name, invoice_batches)
+            connection.execute(
+                upsert.values(
+                    id=SMOKE_BATCH_ID,
+                    run_id=SMOKE_RUN_ID,
+                    slot_index=0,
+                    scheduled_at=at,
+                    target_count=12,
+                    status=BatchStatus.COMPLETED,
+                    attempts=0,
+                    created_at=at,
+                ).on_conflict_do_nothing(index_elements=[invoice_batches.c.id])
+            )
+            upsert = _conflict_aware_insert(self.engine.dialect.name, invoice_drafts)
+            connection.execute(
+                upsert.values(
+                    id=str(draft.id),
+                    batch_id=SMOKE_BATCH_ID,
+                    ordinal=draft.ordinal,
+                    payer_name=draft.payer_name,
+                    payer_tax_id=draft.payer_tax_id,
+                    amount=int(draft.amount),
+                    tag=draft.tag,
+                    status=DraftStatus.CREATED,
+                    provider_invoice_id=provider_invoice_id,
+                    attempts=0,
+                    reconcile_attempts=0,
+                    created_at=at,
+                    updated_at=at,
+                    next_attempt_at=at,
+                ).on_conflict_do_nothing(index_elements=[invoice_drafts.c.id])
+            )
 
     def pending(self, batch_id: BatchId, now: datetime | None = None) -> tuple[InvoiceDraft, ...]:
         effective_now = now or datetime.now(UTC)
