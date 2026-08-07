@@ -174,3 +174,12 @@ jobs:
             "$VPS_USER@$VPS_HOST" "$remote_command"
           printf "Released \`%s\` from \`%s\` to %s.\n" \
             "$image" "$SOURCE_SHA" "$PUBLIC_BASE_URL" >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify authenticated review API
+        env:
+          PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+          REVIEW_API_TOKEN: ${{ secrets.REVIEW_API_TOKEN }}
+        run: |
+          curl --fail --silent --show-error --max-time 15 \
+            --header "Authorization: Bearer $REVIEW_API_TOKEN" \
+            "$PUBLIC_BASE_URL/api/v1/review/overview" | \
+            jq --exit-status 'type == "object"' >/dev/null
