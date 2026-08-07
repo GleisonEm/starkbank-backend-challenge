@@ -22,7 +22,7 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     configure_logging(resolved_settings.log_level, resolved_settings.log_file)
     resolved_services = services if services is not None else build_services(resolved_settings)
     app = Flask(__name__)
-    app.config.update(MAX_CONTENT_LENGTH=resolved_settings.max_content_length)
+    app.config["MAX_CONTENT_LENGTH"] = int(resolved_settings.max_content_length)
 
     def live() -> Response:
         return jsonify(status="ok")
