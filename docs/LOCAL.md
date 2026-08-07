@@ -10,10 +10,9 @@ database.
 - GNU Make and `curl`;
 - a Stark Bank key only if you want to make real Sandbox calls.
 
-If you are using Colima:
+If you are using Docker:
 
 ```bash
-colima start --cpu 2 --memory 4 --disk 30
 docker version
 docker compose version
 ```
@@ -91,6 +90,26 @@ make smoke-batch COUNT=8 CONFIRM_SANDBOX=yes
 The Quick Tunnel runs inside Compose and does not require a Cloudflare account or token. It is
 temporary and is not used on the VPS. Ngrok is an alternative, but normally requires an account
 and authtoken.
+
+## One environment, one Sandbox workspace
+
+Stark Bank delivers every event to **all webhooks registered in the workspace** where the
+operation happened, and it retries failed deliveries. If two applications (for example, this
+local clone and the VPS deployment) run at the same time against the **same Project and
+Workspace**, they both receive every invoice and transfer event of that workspace. Each worker
+then queues transfers for invoices it never created, and retries can arrive long after the
+original event.
+
+Keep each running environment isolated:
+
+- Use one Sandbox Project/Workspace **per environment** (local, VPS, reviewer).
+- To test locally with real credentials, create a separate Sandbox Project/Workspace in the
+  Stark Bank dashboard and upload only `secrets/public-key.pem` to it.
+- Never point two running instances at the same `STARKBANK_PROJECT_ID` +
+  `STARKBANK_WORKSPACE_ID`.
+- If you must share a workspace (for example, to validate a local build before deploy), stop
+  the other environment first, and remove the test events before starting it again — see
+  [`SANDBOX.md`](SANDBOX.md) "Clean up after local experiments".
 
 ## Logs and shutdown
 

@@ -24,7 +24,14 @@ from starkbank_trial.domain.provider import (
 )
 from starkbank_trial.domain.status import DraftStatus
 from starkbank_trial.domain.transfer import build_transfer_command
-from starkbank_trial.domain.types import BatchId, Cents, DraftId, InvoiceId, TransferId
+from starkbank_trial.domain.types import (
+    BatchId,
+    Cents,
+    DraftId,
+    EventId,
+    InvoiceId,
+    TransferId,
+)
 from starkbank_trial.infrastructure.starkbank_client import StarkBankClient
 
 
@@ -85,6 +92,8 @@ def test_live_kill_switch_blocks_all_provider_writes(sdk_client: StarkBankClient
         disabled.ensure_webhook("https://trial.example.com/webhooks/starkbank")
     with pytest.raises(LiveOperationsDisabledError):
         disabled.delete_webhook("webhook-1")
+    with pytest.raises(LiveOperationsDisabledError):
+        disabled.delete_event(EventId("event-1"))
 
 
 def test_read_timeout_is_transient(
@@ -252,3 +261,43 @@ def test_webhook_rejects_a_different_workspace(
 
     with pytest.raises(UnexpectedWorkspaceError):
         sdk_client.verify_event(b"payload", "signature")
+
+
+def test_list_events_timeout_is_transient(
+    monkeypatch: pytest.MonkeyPatch,
+    sdk_client: StarkBankClient,
+) -> None:
+    # Given
+    def query(
+        limit: int | None = None,
+        after: datetime | None = None,
+        before: datetime | None = None,
+        user: starkbank.Project | None = None,
+    ) -> Iterator[object]:
+        message = "timeout"
+        raise UnknownError(message)
+
+    monkeypatch.setattr(starkbank.event, "query", query)
+
+    # When / Then
+    with pytest.raises(ProviderTransientError):
+        sdk_client.list_events(datetime(2026, 8, 7, 8, tzinfo=UTC))
+
+
+def test_delete_event_timeout_has_unknown_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+    sdk_client: StarkBankClient,
+) -> None:
+    # Given
+    def delete(
+        event_id: str,
+        user: starkbank.Project | None = None,
+    ) -> None:
+        message = "timeout"
+        raise UnknownError(message)
+
+    monkeypatch.setattr(starkbank.event, "delete", delete)
+
+    # When / Then
+    with pytest.raises(ProviderUnknownOutcomeError):
+        sdk_client.delete_event(EventId("event-1"))

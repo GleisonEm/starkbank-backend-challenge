@@ -12,8 +12,8 @@ CONTEXT.md
 .env.production
 .env.production.secrets
 reviewer.env
-# Documentacao pessoal de auto-explicacao; nao pertence ao repositorio publico.
-docs/auto-explicacao/
+# Documentation trash; does not belong to public repository.
+docs/others/
 __pycache__/
 .pytest_cache/
 .mypy_cache/

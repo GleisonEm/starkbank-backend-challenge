@@ -39,6 +39,8 @@ app.add_typer(provider_app, name="provider")
 SANDBOX_CONFIRMATION_ERROR = (
     "live Sandbox calls require STARKBANK_SANDBOX_LIVE_ENABLED=true and --confirm-sandbox"
 )
+INVALID_ISO_TIMESTAMP_ERROR = "after and before must be ISO 8601 timestamps"
+INVALID_TIME_WINDOW_ERROR = "before must be later than after"
 
 
 def _services() -> Services:
@@ -222,6 +224,48 @@ def provider_cleanup_webhooks(
             "active_id": active.id,
             "replaced_webhook_ids": replaced,
             "subscriptions": sorted(WEBHOOK_SUBSCRIPTIONS),
+        }
+    )
+
+
+@provider_app.command("cleanup-events")
+def provider_cleanup_events(
+    *,
+    after: str = typer.Option(...),
+    before: str | None = typer.Option(default=None),
+    confirm_sandbox: Annotated[bool, typer.Option()] = False,
+) -> None:
+    settings = Settings()
+    if not settings.starkbank_sandbox_live_enabled or not confirm_sandbox:
+        raise typer.BadParameter(SANDBOX_CONFIRMATION_ERROR)
+    try:
+        after_dt = datetime.fromisoformat(after)
+        before_dt = datetime.fromisoformat(before) if before is not None else None
+    except ValueError as error:
+        raise typer.BadParameter(INVALID_ISO_TIMESTAMP_ERROR) from error
+    if before_dt is not None and before_dt <= after_dt:
+        raise typer.BadParameter(INVALID_TIME_WINDOW_ERROR)
+    client = build_client(settings)
+    deleted: list[str] = []
+    failed: list[str] = []
+    try:
+        for event_id in client.list_events(after_dt, before_dt):
+            try:
+                client.delete_event(event_id)
+            except ProviderError:
+                failed.append(str(event_id))
+                continue
+            deleted.append(str(event_id))
+    except ProviderError as error:
+        _exit_provider_error(error)
+    _write_result(
+        {
+            "deleted": deleted,
+            "failed": failed,
+            "window": {
+                "after": after_dt.isoformat(),
+                "before": before_dt.isoformat() if before_dt is not None else None,
+            },
         }
     )
 

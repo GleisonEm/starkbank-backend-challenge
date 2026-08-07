@@ -58,7 +58,7 @@ Useful filters include `trial_id`, `status`, `provider_status`, `credit_status`,
 `to_at`, `limit` and `cursor`. Status filters may be repeated, for example
 `?status=failed&status=unknown`.
 
-The API deliberately omits payer identity, tax IDs, bank account data, raw webhook bodies and
+The API does not expose payer identity, tax IDs, bank account data, raw webhook bodies or
 signatures. Amounts are integer cents. Transfer `dispatch_status` describes this application's
 durable job; `provider_status` describes the latest status received from Stark Bank.
 

@@ -5,8 +5,8 @@ hours for 24 hours and, when an Invoice is credited, sends the net amount to the
 by the challenge.
 
 The application uses Python 3.13, Flask 3.1, `starkbank==2.35.0`, PostgreSQL, Gunicorn,
-Supercronic and Docker Compose. It deliberately does not need Kubernetes, Swarm, Redis or
-Valkey for this workload.
+Supercronic and Docker Compose. It does not need Kubernetes, Swarm, Redis or Valkey for
+this workload.
 
 ## Evaluate it
 

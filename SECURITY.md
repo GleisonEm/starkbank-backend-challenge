@@ -43,7 +43,7 @@ proofs that move money in a public issue.
 
 ## Temporary reviewer sudo
 
-The `reviewer` account deliberately has passwordless full sudo during evaluation. Full sudo is
+The `reviewer` account has passwordless full sudo during evaluation. Full sudo is
 equivalent to root and can access:
 
 - all containers and volumes;

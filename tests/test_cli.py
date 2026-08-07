@@ -366,6 +366,186 @@ def test_provider_smoke_invoice_creates_deterministic_safe_invoice(
     assert gateway.created_drafts[0].amount == 10_000
 
 
+def test_provider_cleanup_events_deletes_events_in_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given
+    class CleanupEventsGateway(FakeGateway):
+        def __init__(self) -> None:
+            super().__init__()
+            self.deleted: list[str] = []
+
+        def list_events(
+            self,
+            after: datetime,
+            before: datetime | None = None,
+        ) -> tuple[EventId, ...]:
+            return tuple(EventId(f"event-{ordinal}") for ordinal in range(3))
+
+        def delete_event(self, event_id: EventId) -> None:
+            self.deleted.append(str(event_id))
+
+    gateway = CleanupEventsGateway()
+    monkeypatch.setenv("STARKBANK_SANDBOX_LIVE_ENABLED", "true")
+
+    def fixed_client(settings: Settings) -> CleanupEventsGateway:
+        return gateway
+
+    monkeypatch.setattr(cli_module, "build_client", fixed_client)
+
+    # When
+    result = CliRunner().invoke(
+        cli_module.app,
+        [
+            "provider",
+            "cleanup-events",
+            "--after",
+            "2026-08-07T08:00:00+00:00",
+            "--confirm-sandbox",
+        ],
+    )
+
+    # Then
+    assert result.exit_code == 0
+    assert gateway.deleted == ["event-0", "event-1", "event-2"]
+    assert json.loads(result.stdout) == {
+        "deleted": ["event-0", "event-1", "event-2"],
+        "failed": [],
+        "window": {"after": "2026-08-07T08:00:00+00:00", "before": None},
+    }
+
+
+def test_provider_cleanup_events_reports_partial_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given
+    class FailingDeleteGateway(FakeGateway):
+        def __init__(self) -> None:
+            super().__init__()
+            self.deleted: list[str] = []
+
+        def list_events(
+            self,
+            after: datetime,
+            before: datetime | None = None,
+        ) -> tuple[EventId, ...]:
+            return tuple(EventId(f"event-{ordinal}") for ordinal in range(3))
+
+        def delete_event(self, event_id: EventId) -> None:
+            if str(event_id) == "event-1":
+                raise ProviderPermanentError(operation="delete_event")
+            self.deleted.append(str(event_id))
+
+    gateway = FailingDeleteGateway()
+    monkeypatch.setenv("STARKBANK_SANDBOX_LIVE_ENABLED", "true")
+
+    def fixed_client(settings: Settings) -> FailingDeleteGateway:
+        return gateway
+
+    monkeypatch.setattr(cli_module, "build_client", fixed_client)
+
+    # When
+    result = CliRunner().invoke(
+        cli_module.app,
+        [
+            "provider",
+            "cleanup-events",
+            "--after",
+            "2026-08-07T08:00:00+00:00",
+            "--before",
+            "2026-08-07T09:00:00+00:00",
+            "--confirm-sandbox",
+        ],
+    )
+
+    # Then
+    assert result.exit_code == 0
+    assert gateway.deleted == ["event-0", "event-2"]
+    assert json.loads(result.stdout) == {
+        "deleted": ["event-0", "event-2"],
+        "failed": ["event-1"],
+        "window": {
+            "after": "2026-08-07T08:00:00+00:00",
+            "before": "2026-08-07T09:00:00+00:00",
+        },
+    }
+
+
+def test_provider_cleanup_events_requires_after_and_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given
+    monkeypatch.setenv("STARKBANK_SANDBOX_LIVE_ENABLED", "true")
+
+    # When / Then: missing --after is rejected
+    missing_after = CliRunner().invoke(
+        cli_module.app,
+        ["provider", "cleanup-events", "--confirm-sandbox"],
+    )
+    assert missing_after.exit_code == 2
+
+    # When / Then: missing --confirm-sandbox is rejected
+    monkeypatch.setenv("STARKBANK_SANDBOX_LIVE_ENABLED", "false")
+    without_confirm = CliRunner().invoke(
+        cli_module.app,
+        ["provider", "cleanup-events", "--after", "2026-08-07T08:00:00+00:00"],
+    )
+    assert without_confirm.exit_code == 2
+
+    # When / Then: invalid ISO timestamp is rejected
+    monkeypatch.setenv("STARKBANK_SANDBOX_LIVE_ENABLED", "true")
+    invalid_after = CliRunner().invoke(
+        cli_module.app,
+        [
+            "provider",
+            "cleanup-events",
+            "--after",
+            "not-a-timestamp",
+            "--confirm-sandbox",
+        ],
+    )
+    assert invalid_after.exit_code == 2
+
+
+def test_provider_cleanup_events_list_failure_is_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given
+    class FailingListGateway(FakeGateway):
+        def list_events(
+            self,
+            after: datetime,
+            before: datetime | None = None,
+        ) -> tuple[EventId, ...]:
+            raise ProviderPermanentError(operation="list_events")
+
+    monkeypatch.setenv("STARKBANK_SANDBOX_LIVE_ENABLED", "true")
+
+    def fixed_client(settings: Settings) -> FailingListGateway:
+        return FailingListGateway()
+
+    monkeypatch.setattr(cli_module, "build_client", fixed_client)
+
+    # When
+    result = CliRunner().invoke(
+        cli_module.app,
+        [
+            "provider",
+            "cleanup-events",
+            "--after",
+            "2026-08-07T08:00:00+00:00",
+            "--confirm-sandbox",
+        ],
+    )
+
+    # Then
+    assert result.exit_code == 1
+    assert json.loads(result.stderr) == {
+        "error": "provider_operation_failed",
+        "operation": "list_events",
+    }
+
+
 def test_db_upgrade_command_applies_migrations(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -1,5 +1,5 @@
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -11,7 +11,7 @@ from starkbank_trial.domain.invoices import InvoiceDraft
 from starkbank_trial.domain.provider import ProviderPermanentError, ProviderUnknownOutcomeError
 from starkbank_trial.domain.status import DraftStatus
 from starkbank_trial.domain.transfer import build_transfer_command
-from starkbank_trial.domain.types import BatchId, Cents, DraftId, InvoiceId, TransferId
+from starkbank_trial.domain.types import BatchId, Cents, DraftId, EventId, InvoiceId, TransferId
 from starkbank_trial.infrastructure.starkbank_client import StarkBankClient
 
 
@@ -523,6 +523,133 @@ def test_ensure_webhook_input_error_is_permanent(
 
     with pytest.raises(ProviderPermanentError):
         sdk_client.ensure_webhook("https://trial.example.com/webhooks/starkbank")
+
+
+def test_list_events_maps_safe_event_ids(
+    monkeypatch: pytest.MonkeyPatch,
+    sdk_client: StarkBankClient,
+) -> None:
+    # Given
+    after = datetime(2026, 8, 7, 8, tzinfo=UTC)
+    before = datetime(2026, 8, 7, 9, tzinfo=UTC)
+    captured: dict[str, object] = {}
+
+    def query(
+        limit: int | None = None,
+        after: datetime | None = None,
+        before: datetime | None = None,
+        user: starkbank.Project | None = None,
+    ) -> Iterator[object]:
+        captured["after"] = after
+        captured["before"] = before
+        captured["user"] = user
+        return iter(
+            (
+                SimpleNamespace(
+                    id="event-1",
+                    subscription="invoice",
+                    workspace_id="workspace-1",
+                    log=SimpleNamespace(type="credited"),
+                ),
+                SimpleNamespace(
+                    id="event-2",
+                    subscription="transfer",
+                    workspace_id="workspace-1",
+                    log=SimpleNamespace(type="created"),
+                ),
+            )
+        )
+
+    monkeypatch.setattr(starkbank.event, "query", query)
+
+    # When
+    result = sdk_client.list_events(after, before)
+
+    # Then
+    assert result == (EventId("event-1"), EventId("event-2"))
+    # The SDK truncates datetime objects to dates, so the window must be sent
+    # as UTC strings that keep hour precision.
+    assert captured["after"] == "2026-08-07T08:00:00+00:00"
+    assert captured["before"] == "2026-08-07T09:00:00+00:00"
+    assert captured["user"] is sdk_client.user
+
+
+def test_list_events_keeps_hour_precision_for_non_utc_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+    sdk_client: StarkBankClient,
+) -> None:
+    # Given: a timezone-aware boundary that is not UTC (America/Sao_Paulo, UTC-3).
+    sao_paulo = timezone(timedelta(hours=-3))
+    captured: dict[str, object] = {}
+
+    def query(
+        limit: int | None = None,
+        after: datetime | None = None,
+        before: datetime | None = None,
+        user: starkbank.Project | None = None,
+    ) -> Iterator[object]:
+        captured["after"] = after
+        return iter(())
+
+    monkeypatch.setattr(starkbank.event, "query", query)
+
+    # When
+    result = sdk_client.list_events(
+        datetime(2026, 8, 7, 5, tzinfo=sao_paulo),
+        datetime(2026, 8, 7, 6, tzinfo=sao_paulo),
+    )
+
+    # Then: converted to UTC (08:00/09:00 UTC) and sent with hour precision.
+    assert result == ()
+    assert captured["after"] == "2026-08-07T08:00:00+00:00"
+
+
+def test_list_events_without_upper_bound_passes_before_none(
+    monkeypatch: pytest.MonkeyPatch,
+    sdk_client: StarkBankClient,
+) -> None:
+    # Given
+    captured: dict[str, object] = {}
+
+    def query(
+        limit: int | None = None,
+        after: datetime | None = None,
+        before: datetime | None = None,
+        user: starkbank.Project | None = None,
+    ) -> Iterator[object]:
+        captured["before"] = before
+        return iter(())
+
+    monkeypatch.setattr(starkbank.event, "query", query)
+
+    # When
+    result = sdk_client.list_events(datetime(2026, 8, 7, 8, tzinfo=UTC))
+
+    # Then
+    assert result == ()
+    assert captured["before"] is None
+
+
+def test_delete_event_calls_sdk(
+    monkeypatch: pytest.MonkeyPatch,
+    sdk_client: StarkBankClient,
+) -> None:
+    deleted: list[str] = []
+    captured_user: list[starkbank.Project | None] = []
+
+    def delete(
+        event_id: str,
+        user: starkbank.Project | None = None,
+    ) -> None:
+        deleted.append(event_id)
+        captured_user.append(user)
+
+    monkeypatch.setattr(starkbank.event, "delete", delete)
+
+    sdk_client.delete_event(EventId("event-1"))
+
+    assert deleted == ["event-1"]
+    assert captured_user == [sdk_client.user]
 
 
 def test_list_webhooks_maps_safe_provider_fields(

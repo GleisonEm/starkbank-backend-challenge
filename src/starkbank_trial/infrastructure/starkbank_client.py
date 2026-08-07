@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, NoReturn, cast
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
 
 import starkbank
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -278,6 +278,44 @@ class StarkBankClient:
             delete(webhook_id, user=self.user)
         except StarkError as error:
             self._raise_provider(error, "delete_webhook", unknown_outcome=True)
+
+    def list_events(
+        self,
+        after: datetime,
+        before: datetime | None = None,
+    ) -> tuple[EventId, ...]:
+        # The SDK check_date() truncates datetime objects to dates, so the
+        # window boundaries are serialized as UTC strings to keep hour
+        # precision ("%Y-%m-%dT%H:%M:%S+00:00" is accepted by the SDK).
+        after_filter = after.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        before_filter = (
+            before.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+            if before is not None
+            else None
+        )
+        query = cast(
+            "Callable[..., Iterable[object]] | None",
+            getattr(starkbank.event, "query", None),
+        )
+        if query is None:
+            raise ProviderPermanentError(operation="list_events")
+        try:
+            return tuple(
+                EventId(_SdkEvent.model_validate(item).id)
+                for item in query(after=after_filter, before=before_filter, user=self.user)
+            )
+        except (StarkError, ValidationError) as error:
+            self._raise_provider(error, "list_events", unknown_outcome=False)
+
+    def delete_event(self, event_id: EventId) -> None:
+        self._require_live("delete_event")
+        delete = cast("Callable[..., object] | None", getattr(starkbank.event, "delete", None))
+        if delete is None:
+            raise ProviderPermanentError(operation="delete_event")
+        try:
+            delete(str(event_id), user=self.user)
+        except (StarkError, ValidationError) as error:
+            self._raise_provider(error, "delete_event", unknown_outcome=True)
 
     def list_webhooks(self) -> tuple[ProviderWebhook, ...]:
         try:

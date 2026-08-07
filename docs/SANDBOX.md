@@ -40,6 +40,27 @@ Unsigned health probes or hand-written POST requests are expected to log `missin
 `invalid_signature_or_payload`; a real Stark Bank event must include `Digital-Signature` and be
 validated from its raw bytes.
 
+## Clean up after local experiments
+
+Events are delivered to every webhook of the workspace, and Stark Bank retries failed
+deliveries. If a local test created invoices or transfers in a workspace that another
+environment also uses, delete the events of that test window **before** the other environment
+processes them — otherwise its worker will queue transfers for invoices it never created.
+
+```bash
+make webhook-list
+docker compose --env-file .env -f compose.yaml -p starkbank-trial-local run --rm scheduler \
+    starkbank-trial provider cleanup-events \
+    --after "2026-08-07T10:00:00+00:00" --confirm-sandbox
+```
+
+`cleanup-events` deletes the notification events created inside the `--after` (required)
+to `--before` (optional, default: now) window and reports the deleted and failed ids as
+machine-readable JSON. It only touches the workspace of the configured credentials, requires
+`STARKBANK_SANDBOX_LIVE_ENABLED=true` and `--confirm-sandbox`, and never deletes invoices or
+transfers — it only removes undelivered event notifications so they are not retried later.
+This is a maintenance command; the challenge flow does not need it.
+
 ## Smoke Invoice
 
 Create one deterministic Invoice before the 24-hour run:
