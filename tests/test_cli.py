@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 
 import starkbank_trial.cli as cli_module
 from starkbank_trial.application.clock import SystemClock
-from starkbank_trial.application.transfers import TransferWorker
+from starkbank_trial.application.transfers import TransferWorker, WorkerResult, should_poll
 from starkbank_trial.application.trials import TrialService
 from starkbank_trial.application.webhooks import WebhookService
 from starkbank_trial.bootstrap import Services
@@ -406,3 +406,40 @@ def test_direct_alembic_upgrade_reads_project_env_file(
     engine = create_engine(database_url)
     assert "transfer_jobs" in inspect(engine).get_table_names()
     engine.dispose()
+
+
+def test_should_poll_only_for_no_work_results() -> None:
+    assert should_poll(WorkerResult.SUCCEEDED) is False
+    assert should_poll(WorkerResult.RETRY_SCHEDULED) is False
+    assert should_poll(WorkerResult.RECONCILIATION_SCHEDULED) is False
+    assert should_poll(WorkerResult.PERMANENT_FAILURE) is False
+    assert should_poll(WorkerResult.IDLE) is True
+    assert should_poll(WorkerResult.LIVE_DISABLED) is True
+
+
+def test_worker_run_sleeps_when_live_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given
+    class DisabledWorker:
+        def __init__(self) -> None:
+            self.count = 0
+
+        def process_one(self) -> WorkerResult:
+            self.count += 1
+            if self.count > 1:
+                raise KeyboardInterrupt
+            return WorkerResult.LIVE_DISABLED
+
+    class DisabledServices:
+        worker = DisabledWorker()
+        provider = None
+
+    monkeypatch.setattr(cli_module, "_services", DisabledServices)
+    calls: list[float] = []
+    monkeypatch.setattr(cli_module.time, "sleep", calls.append)
+
+    # When
+    with pytest.raises(KeyboardInterrupt):
+        cli_module.worker_run(poll_seconds=2.0)
+
+    # Then
+    assert calls == [2.0]

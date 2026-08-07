@@ -40,6 +40,7 @@ def build_services(settings: Settings) -> Services:
             retry_base_seconds=settings.retry_base_seconds,
             invoice_max_attempts=settings.invoice_max_attempts,
             invoice_reconciliation_max_attempts=settings.invoice_reconciliation_max_attempts,
+            batch_max_attempts=settings.batch_max_attempts,
         ),
         webhook=WebhookService(client, stores.events, clock),
         worker=TransferWorker(

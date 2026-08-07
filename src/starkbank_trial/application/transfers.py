@@ -30,6 +30,11 @@ class WorkerResult(StrEnum):
     LIVE_DISABLED = "live_disabled"
 
 
+def should_poll(result: WorkerResult) -> bool:
+    """Whether the worker loop should sleep after a result (no work left to do)."""
+    return result in (WorkerResult.IDLE, WorkerResult.LIVE_DISABLED)
+
+
 @dataclass(frozen=True, slots=True)
 class TransferWorker:
     store: TransferStore

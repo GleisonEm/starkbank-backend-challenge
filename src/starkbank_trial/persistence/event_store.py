@@ -47,6 +47,12 @@ class EventStore:
             return EventWriteResult.REJECTED
         return EventWriteResult.QUEUED
 
+    def record_ignored_workspace(self, record: EventRecord) -> EventWriteResult:
+        with self.engine.begin() as connection:
+            if not self._insert_event(connection, record, EventWriteResult.IGNORED_WORKSPACE):
+                return EventWriteResult.DUPLICATE_EVENT
+        return EventWriteResult.IGNORED_WORKSPACE
+
     def _record_transfer_event(
         self,
         connection: Connection,

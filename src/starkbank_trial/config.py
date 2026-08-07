@@ -70,6 +70,7 @@ class Settings(BaseSettings):
         default=5, ge=1, alias="INVOICE_RECONCILIATION_MAX_ATTEMPTS"
     )
     transfer_max_attempts: int = Field(default=10, ge=1, alias="TRANSFER_MAX_ATTEMPTS")
+    batch_max_attempts: int = Field(default=15, ge=1, alias="BATCH_MAX_ATTEMPTS")
     review_api_enabled: bool = Field(default=False, alias="REVIEW_API_ENABLED")
     review_api_token: SecretStr | None = Field(default=None, alias="REVIEW_API_TOKEN")
     review_api_rate_limit: str = Field(

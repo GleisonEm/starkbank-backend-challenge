@@ -8,11 +8,15 @@ from sqlalchemy import create_engine, select
 from starkbank_trial.application.payers import build_invoice_drafts
 from starkbank_trial.application.trials import TrialService, TrialTickResult
 from starkbank_trial.domain.invoices import InvoiceDraft, ProviderInvoice
-from starkbank_trial.domain.provider import ProviderTimeoutError, ProviderTransientError
-from starkbank_trial.domain.status import BatchStatus, DraftStatus
-from starkbank_trial.domain.trials import InvoiceBatch
+from starkbank_trial.domain.provider import (
+    ProviderTimeoutError,
+    ProviderTransientError,
+    ProviderUnknownOutcomeError,
+)
+from starkbank_trial.domain.status import BatchStatus, DraftStatus, TrialStatus
+from starkbank_trial.domain.trials import BatchClaim, InvoiceBatch
 from starkbank_trial.domain.types import BatchId, InvoiceId, TrialRunId
-from starkbank_trial.persistence.schema import invoice_drafts, metadata
+from starkbank_trial.persistence.schema import invoice_batches, invoice_drafts, metadata, trial_runs
 from starkbank_trial.persistence.stores import Stores, build_stores
 
 
@@ -153,3 +157,166 @@ def test_invoice_retries_are_bounded_and_end_in_failed(stores: Stores) -> None:
     assert all(row.status == DraftStatus.FAILED for row in rows)
     assert all(row.attempts == 5 for row in rows)
     assert all(row.last_error_code == "retry_exhausted" for row in rows)
+
+
+class _LateTagProvider(RecordingInvoiceProvider):
+    def __init__(self, *, tag_visible: bool) -> None:
+        super().__init__()
+        self.tag_visible = tag_visible
+
+    def create_invoice(self, draft: InvoiceDraft) -> ProviderInvoice:
+        self.created.append(draft)
+        self.known_by_tag[draft.tag] = ProviderInvoice(
+            id=InvoiceId(f"provider-{draft.ordinal}"), tag=draft.tag
+        )
+        raise ProviderUnknownOutcomeError(operation="invoice.create")
+
+    def find_invoice(self, tag: str) -> ProviderInvoice | None:
+        if self.tag_visible:
+            return self.known_by_tag.get(tag)
+        return None
+
+
+def _exhaust_reconciliation(
+    service: TrialService,
+    clock: FixedClock,
+) -> None:
+    for _ in range(5):
+        service.reconcile_invoices()
+        clock.value += timedelta(seconds=11)
+
+
+def test_retried_draft_is_found_by_tag_before_recreate(stores: Stores) -> None:
+    # Given
+    now = datetime(2026, 8, 1, 12, tzinfo=UTC)
+    clock = FixedClock(now)
+    provider = _LateTagProvider(tag_visible=False)
+    service = TrialService(
+        stores,
+        provider,
+        clock,
+        FixedBatchCounts((8,) * 8),
+        retry_base_seconds=5,
+        invoice_max_attempts=5,
+        invoice_reconciliation_max_attempts=5,
+    )
+    service.start(now)
+    assert service.tick() is TrialTickResult.RECONCILING
+    _exhaust_reconciliation(service, clock)
+    provider.tag_visible = True
+
+    # When
+    clock.value += timedelta(hours=1)
+    result = service.tick()
+
+    # Then
+    assert result is TrialTickResult.COMPLETED
+    assert len(provider.created) == 8
+    with stores.invoices.engine.connect() as connection:
+        rows = connection.execute(
+            select(
+                invoice_drafts.c.status,
+                invoice_drafts.c.attempts,
+                invoice_drafts.c.provider_invoice_id,
+            )
+        ).all()
+    assert all(row.status == DraftStatus.CREATED for row in rows)
+    assert all(row.attempts == 2 for row in rows)
+    assert all(row.provider_invoice_id is not None for row in rows)
+
+
+def test_draft_with_missing_tag_is_created_again(stores: Stores) -> None:
+    # Given
+    now = datetime(2026, 8, 1, 12, tzinfo=UTC)
+    clock = FixedClock(now)
+    provider = _LateTagProvider(tag_visible=False)
+    service = TrialService(
+        stores,
+        provider,
+        clock,
+        FixedBatchCounts((8,) * 8),
+        retry_base_seconds=5,
+        invoice_max_attempts=5,
+        invoice_reconciliation_max_attempts=5,
+    )
+    service.start(now)
+    assert service.tick() is TrialTickResult.RECONCILING
+    _exhaust_reconciliation(service, clock)
+
+    # When
+    clock.value += timedelta(hours=1)
+    result = service.tick()
+
+    # Then
+    assert result is TrialTickResult.RECONCILING
+    assert len(provider.created) == 16
+    with stores.invoices.engine.connect() as connection:
+        attempts = (
+            connection.execute(select(invoice_drafts.c.attempts).order_by(invoice_drafts.c.ordinal))
+            .scalars()
+            .all()
+        )
+    assert attempts == [2] * 8
+
+
+def test_batch_claims_are_bounded_and_exhausted_batch_is_degraded(stores: Stores) -> None:
+    # Given
+    now = datetime(2026, 8, 1, 12, tzinfo=UTC)
+    service = TrialService(
+        stores,
+        RecordingInvoiceProvider(),
+        FixedClock(now),
+        FixedBatchCounts((8,) * 8),
+    )
+    service.start(now)
+
+    # When
+    claimed: list[bool] = []
+    for offset in (0, 301, 602):
+        claim_time = now + timedelta(seconds=offset)
+        batch = stores.trials.claim_due_batch(
+            BatchClaim(
+                now=claim_time,
+                lease_until=claim_time + timedelta(seconds=300),
+                max_attempts=2,
+            )
+        )
+        claimed.append(batch is not None)
+
+    # Then
+    assert claimed == [True, True, False]
+    with stores.trials.engine.connect() as connection:
+        status = connection.execute(
+            select(invoice_batches.c.status).order_by(invoice_batches.c.scheduled_at).limit(1)
+        ).scalar_one()
+        trial_status = connection.execute(select(trial_runs.c.status)).scalar_one()
+    assert status == BatchStatus.DEGRADED
+    assert trial_status == TrialStatus.DEGRADED
+
+
+def test_report_skips_degraded_batches_for_next_batch(stores: Stores) -> None:
+    # Given
+    now = datetime(2026, 8, 1, 12, tzinfo=UTC)
+    service = TrialService(
+        stores,
+        RecordingInvoiceProvider(),
+        FixedClock(now),
+        FixedBatchCounts((8,) * 8),
+    )
+    service.start(now)
+    for offset in (0, 301, 602):
+        claim_time = now + timedelta(seconds=offset)
+        stores.trials.claim_due_batch(
+            BatchClaim(
+                now=claim_time,
+                lease_until=claim_time + timedelta(seconds=300),
+                max_attempts=2,
+            )
+        )
+
+    # When
+    report = stores.trials.report()
+
+    # Then
+    assert report.trial is not None
+    assert report.trial.next_batch_at == now + timedelta(hours=3)

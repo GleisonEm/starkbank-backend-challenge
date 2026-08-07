@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from flask.testing import FlaskClient
-from sqlalchemy import Engine, create_engine, func, select
+from sqlalchemy import Engine, create_engine, select
 from sqlalchemy.exc import SQLAlchemyError
 
 from starkbank_trial.application.transfers import TransferWorker
@@ -71,6 +71,9 @@ class FakeGateway:
             raise UnexpectedWorkspaceError(
                 operation="verify_event",
                 workspace_id="workspace-foreign",
+                event_id="event-foreign",
+                subscription="invoice",
+                log_type="credited",
             )
         return self.event
 
@@ -200,7 +203,7 @@ def test_webhook_reports_provider_verification_outage(app_fixture: AppFixture) -
     assert response.get_json() == {"error": "verification unavailable"}
 
 
-def test_webhook_ignores_foreign_workspace_without_persisting(
+def test_webhook_ignores_foreign_workspace_and_audits_it(
     app_fixture: AppFixture,
 ) -> None:
     app_fixture.gateway.foreign_workspace = True
@@ -214,9 +217,14 @@ def test_webhook_ignores_foreign_workspace_without_persisting(
     assert response.status_code == 200
     assert response.get_json() == {"status": "ignored_workspace"}
     with app_fixture.engine.connect() as connection:
-        assert (
-            connection.execute(select(func.count()).select_from(webhook_events)).scalar_one() == 0
-        )
+        row = connection.execute(
+            select(
+                webhook_events.c.outcome,
+                webhook_events.c.workspace_id,
+            )
+        ).one()
+    assert row.outcome == "ignored_workspace"
+    assert row.workspace_id == "workspace-foreign"
 
 
 def test_webhook_enforces_body_limit(app_fixture: AppFixture) -> None:

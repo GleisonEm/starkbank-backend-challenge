@@ -10,17 +10,22 @@ from sqlalchemy import create_engine, select
 from starkbank_trial.application.transfers import TransferWorker, WorkerResult
 from starkbank_trial.application.webhooks import WebhookService
 from starkbank_trial.domain.constants import STARK_BANK_RECIPIENT
-from starkbank_trial.domain.events import CreditedInvoiceEvent, EventWriteResult, VerifiedEvent
+from starkbank_trial.domain.events import (
+    CreditedInvoiceEvent,
+    EventWriteResult,
+    VerifiedEvent,
+)
 from starkbank_trial.domain.models import TransferCommand
 from starkbank_trial.domain.provider import (
     ProviderTimeoutError,
     ProviderTransfer,
     ProviderTransientError,
+    UnexpectedWorkspaceError,
 )
 from starkbank_trial.domain.status import TransferStatus
 from starkbank_trial.domain.types import Cents, EventId, ExternalId, InvoiceId, TransferId
 from starkbank_trial.logging import configure_logging
-from starkbank_trial.persistence.schema import metadata, transfer_jobs
+from starkbank_trial.persistence.schema import metadata, transfer_jobs, webhook_events
 from starkbank_trial.persistence.stores import Stores, build_stores
 
 
@@ -211,3 +216,40 @@ def test_transfer_retries_are_bounded_and_final_lookup_cannot_duplicate(
     assert row.attempts == 3
     assert row.last_error_code == "retry_exhausted"
     assert len(provider.commands) == 3
+
+
+def test_cross_workspace_event_is_audited_then_ignored(stores: Stores) -> None:
+    # Given
+    class ForeignWorkspaceVerifier:
+        def verify_event(self, content: bytes, signature: str) -> VerifiedEvent:
+            raise UnexpectedWorkspaceError(
+                operation="verify_event",
+                workspace_id="workspace-foreign",
+                event_id="event-foreign",
+                subscription="invoice",
+                log_type="credited",
+            )
+
+    now = datetime(2026, 8, 1, 12, tzinfo=UTC)
+    webhook = WebhookService(ForeignWorkspaceVerifier(), stores.events, FixedClock(now))
+
+    # When
+    with pytest.raises(UnexpectedWorkspaceError):
+        webhook.receive(b'{"payload": "signed"}', "signature")
+
+    # Then
+    with stores.events.engine.connect() as connection:
+        row = connection.execute(
+            select(
+                webhook_events.c.id,
+                webhook_events.c.outcome,
+                webhook_events.c.workspace_id,
+                webhook_events.c.subscription,
+                webhook_events.c.log_type,
+            )
+        ).one()
+    assert row.id == "event-foreign"
+    assert row.outcome == EventWriteResult.IGNORED_WORKSPACE
+    assert row.workspace_id == "workspace-foreign"
+    assert row.subscription == "invoice"
+    assert row.log_type == "credited"

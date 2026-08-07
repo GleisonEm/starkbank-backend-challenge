@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from sqlalchemy import Engine, func, insert, or_, select, update
+from sqlalchemy.engine import Connection
 
 from starkbank_trial.domain.status import BatchStatus, TrialStatus
 from starkbank_trial.domain.trials import (
@@ -87,7 +88,7 @@ class TrialStore:
             next_batch = connection.execute(
                 select(func.min(invoice_batches.c.scheduled_at)).where(
                     invoice_batches.c.run_id == run_id,
-                    invoice_batches.c.status != BatchStatus.COMPLETED,
+                    invoice_batches.c.status.not_in((BatchStatus.COMPLETED, BatchStatus.DEGRADED)),
                 )
             ).scalar_one()
         summary = TrialSummary(
@@ -145,6 +146,7 @@ class TrialStore:
                             invoice_batches.c.lease_until.is_(None),
                             invoice_batches.c.lease_until <= claim.now,
                         ),
+                        invoice_batches.c.attempts < claim.max_attempts,
                     )
                     .order_by(invoice_batches.c.scheduled_at)
                     .with_for_update(skip_locked=True)
@@ -154,6 +156,7 @@ class TrialStore:
                 .first()
             )
             if row is None:
+                self._degrade_exhausted_batches(connection, claim)
                 return None
             attempts = int(row["attempts"]) + 1
             connection.execute(
@@ -175,3 +178,38 @@ class TrialStore:
             lease_until=claim.lease_until,
             attempts=attempts,
         )
+
+    @staticmethod
+    def _degrade_exhausted_batches(connection: Connection, claim: BatchClaim) -> None:
+        exhausted = connection.execute(
+            update(invoice_batches)
+            .where(
+                invoice_batches.c.scheduled_at <= claim.now,
+                invoice_batches.c.status.in_(
+                    (BatchStatus.SCHEDULED, BatchStatus.ISSUING, BatchStatus.RECONCILING)
+                ),
+                or_(
+                    invoice_batches.c.lease_until.is_(None),
+                    invoice_batches.c.lease_until <= claim.now,
+                ),
+                invoice_batches.c.attempts >= claim.max_attempts,
+            )
+            .values(
+                status=BatchStatus.DEGRADED,
+                lease_until=None,
+                completed_at=claim.now,
+            )
+        )
+        if exhausted.rowcount == 0:
+            return
+        run_ids = connection.execute(
+            select(invoice_batches.c.run_id)
+            .where(invoice_batches.c.status == BatchStatus.DEGRADED)
+            .distinct()
+        ).scalars()
+        for run_id in run_ids:
+            connection.execute(
+                update(trial_runs)
+                .where(trial_runs.c.id == run_id)
+                .values(status=TrialStatus.DEGRADED, active_marker=None)
+            )

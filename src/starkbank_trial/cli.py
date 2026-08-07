@@ -14,6 +14,7 @@ from alembic.config import Config
 from starkbank_trial.application.clock import SystemClock
 from starkbank_trial.application.payers import build_smoke_invoice
 from starkbank_trial.application.smoke import SmokeBatchService
+from starkbank_trial.application.transfers import should_poll
 from starkbank_trial.bootstrap import Services, build_client, build_services
 from starkbank_trial.config import Settings
 from starkbank_trial.domain.constants import WEBHOOK_SUBSCRIPTIONS
@@ -311,5 +312,5 @@ def worker_run(poll_seconds: float = typer.Option(default=1.0, min=0.1)) -> None
                 )
     while True:
         result = services.worker.process_one()
-        if result.value == "idle":
+        if should_poll(result):
             time.sleep(poll_seconds)

@@ -43,6 +43,9 @@ class InvalidWebhookError(ProviderError):
 @dataclass(slots=True)
 class UnexpectedWorkspaceError(ProviderError):
     workspace_id: str
+    event_id: str
+    subscription: str
+    log_type: str
 
     def __str__(self) -> str:
         return f"provider event belongs to an unexpected workspace: {self.operation}"

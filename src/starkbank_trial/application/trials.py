@@ -8,7 +8,12 @@ from starkbank_trial.application.clock import Clock
 from starkbank_trial.application.payers import build_invoice_drafts
 from starkbank_trial.application.schedule import build_schedule
 from starkbank_trial.domain.errors import LiveOperationsDisabledError
-from starkbank_trial.domain.invoices import DraftCreated, DraftFailure, InvoiceReconciliation
+from starkbank_trial.domain.invoices import (
+    DraftCreated,
+    DraftFailure,
+    InvoiceDraft,
+    InvoiceReconciliation,
+)
 from starkbank_trial.domain.provider import (
     InvoiceProvider,
     ProviderPermanentError,
@@ -53,6 +58,7 @@ class TrialService:
     retry_base_seconds: int = 5
     invoice_max_attempts: int = 5
     invoice_reconciliation_max_attempts: int = 5
+    batch_max_attempts: int = 15
 
     def start(self, start_at: datetime | None = None) -> TrialRun:
         if not self.live_operations_enabled:
@@ -66,29 +72,54 @@ class TrialService:
             return TrialTickResult.LIVE_DISABLED
         now = self.clock.now()
         batch = self.stores.trials.claim_due_batch(
-            BatchClaim(now=now, lease_until=now + timedelta(seconds=self.batch_lease_seconds))
+            BatchClaim(
+                now=now,
+                lease_until=now + timedelta(seconds=self.batch_lease_seconds),
+                max_attempts=self.batch_max_attempts,
+            )
         )
         if batch is None:
             return TrialTickResult.NO_BATCH
         self.stores.invoices.save(batch.id, build_invoice_drafts(batch, now))
         for draft in self.stores.invoices.pending(batch.id, now):
-            try:
-                invoice = self.provider.create_invoice(draft)
-            except ProviderTimeoutError as error:
-                self.stores.invoices.unknown_result(
-                    DraftFailure(draft.id, type(error).__name__, now)
-                )
-            except ProviderTransientError as error:
-                self.stores.invoices.retry(
-                    DraftFailure(draft.id, type(error).__name__, now),
-                    self._backoff(draft.attempts),
-                    self.invoice_max_attempts,
-                )
-            except ProviderPermanentError as error:
-                self.stores.invoices.failed(DraftFailure(draft.id, type(error).__name__, now))
-            else:
-                self.stores.invoices.created(DraftCreated(draft.id, invoice.id, now))
+            self._issue_draft(draft, now)
         return self._tick_result(self.stores.invoices.settle(batch.id, now))
+
+    def _issue_draft(self, draft: InvoiceDraft, now: datetime) -> None:
+        if draft.attempts > 0 and self._settle_attempted_draft(draft, now):
+            return
+        try:
+            invoice = self.provider.create_invoice(draft)
+        except ProviderTimeoutError as error:
+            self.stores.invoices.unknown_result(DraftFailure(draft.id, type(error).__name__, now))
+        except ProviderTransientError as error:
+            self.stores.invoices.retry(
+                DraftFailure(draft.id, type(error).__name__, now),
+                self._backoff(draft.attempts),
+                self.invoice_max_attempts,
+            )
+        except ProviderPermanentError as error:
+            self.stores.invoices.failed(DraftFailure(draft.id, type(error).__name__, now))
+        else:
+            self.stores.invoices.created(DraftCreated(draft.id, invoice.id, now))
+
+    def _settle_attempted_draft(self, draft: InvoiceDraft, now: datetime) -> bool:
+        try:
+            existing = self.provider.find_invoice(draft.tag)
+        except ProviderTransientError as error:
+            self.stores.invoices.retry(
+                DraftFailure(draft.id, type(error).__name__, now),
+                self._backoff(draft.attempts),
+                self.invoice_max_attempts,
+            )
+            return True
+        except ProviderPermanentError as error:
+            self.stores.invoices.failed(DraftFailure(draft.id, type(error).__name__, now))
+            return True
+        if existing is not None:
+            self.stores.invoices.created(DraftCreated(draft.id, existing.id, now))
+            return True
+        return False
 
     def reconcile_invoices(self) -> int:
         now = self.clock.now()

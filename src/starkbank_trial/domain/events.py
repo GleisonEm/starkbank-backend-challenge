@@ -51,6 +51,7 @@ class EventRecord:
 class EventWriteResult(StrEnum):
     QUEUED = "queued"
     IGNORED = "ignored"
+    IGNORED_WORKSPACE = "ignored_workspace"
     REJECTED = "rejected"
     DUPLICATE_EVENT = "duplicate_event"
     DUPLICATE_INVOICE = "duplicate_invoice"

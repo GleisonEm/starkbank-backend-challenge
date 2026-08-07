@@ -48,6 +48,7 @@ class TrialReport:
 class BatchClaim:
     now: datetime
     lease_until: datetime
+    max_attempts: int = 15
 
 
 @dataclass(frozen=True, slots=True)

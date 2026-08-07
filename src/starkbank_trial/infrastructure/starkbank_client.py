@@ -188,8 +188,8 @@ class StarkBankClient:
         try:
             raw_event = starkbank.event.parse(content.decode(), signature, user=self.user)
             event = _SdkEvent.model_validate(raw_event)
-            self._assert_expected_workspace(event.workspace_id)
             log = _SdkLog.model_validate(event.log)
+            self._assert_expected_workspace(event, log)
             if event.subscription == "transfer":
                 try:
                     transfer_log = _SdkTransferLog.model_validate(event.log)
@@ -319,9 +319,18 @@ class StarkBankClient:
         if not self.live_operations_enabled:
             raise LiveOperationsDisabledError(operation=operation)
 
-    def _assert_expected_workspace(self, workspace_id: str) -> None:
-        if self.expected_workspace_id is not None and workspace_id != self.expected_workspace_id:
-            raise UnexpectedWorkspaceError(operation="verify_event", workspace_id=workspace_id)
+    def _assert_expected_workspace(self, event: _SdkEvent, log: _SdkLog) -> None:
+        if (
+            self.expected_workspace_id is not None
+            and event.workspace_id != self.expected_workspace_id
+        ):
+            raise UnexpectedWorkspaceError(
+                operation="verify_event",
+                workspace_id=event.workspace_id,
+                event_id=event.id,
+                subscription=event.subscription,
+                log_type=log.type,
+            )
 
     @staticmethod
     def _raise_provider(error: Exception, operation: str, *, unknown_outcome: bool) -> NoReturn:
