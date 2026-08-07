@@ -12,6 +12,8 @@ CONTEXT.md
 .env.production
 .env.production.secrets
 reviewer.env
+# Documentacao pessoal de auto-explicacao; nao pertence ao repositorio publico.
+docs/auto-explicacao/
 __pycache__/
 .pytest_cache/
 .mypy_cache/
