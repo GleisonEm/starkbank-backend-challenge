@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, NoReturn, cast
 
 if TYPE_CHECKING:
@@ -201,13 +201,16 @@ class StarkBankClient:
                         workspace_id=event.workspace_id,
                     )
                 transfer = _SdkTransferLifecycle.model_validate(transfer_log.transfer)
+                updated_at = transfer.updated
+                if updated_at.tzinfo is None:
+                    updated_at = updated_at.replace(tzinfo=UTC)
                 return TransferLifecycleEvent(
                     event_id=EventId(event.id),
                     transfer_id=TransferId(transfer.id),
                     external_id=ExternalId(transfer.external_id),
                     status=transfer.status,
                     log_type=log.type,
-                    updated_at=transfer.updated,
+                    updated_at=updated_at,
                     workspace_id=event.workspace_id,
                 )
             if event.subscription != "invoice" or log.type != "credited":

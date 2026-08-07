@@ -138,6 +138,44 @@ def test_verify_event_maps_transfer_lifecycle_from_signed_sdk_event(
     assert result.updated_at == updated
 
 
+def test_verify_event_normalizes_naive_transfer_updated_to_utc(
+    monkeypatch: pytest.MonkeyPatch,
+    sdk_client: StarkBankClient,
+) -> None:
+    # The SDK returns naive datetimes (starkcore check_datetime strips tzinfo);
+    # the client must normalize to UTC so the event store can compare safely.
+    updated = datetime(2026, 8, 1, 12, 5, tzinfo=UTC).replace(tzinfo=None)
+    raw = SimpleNamespace(
+        id="event-transfer-2",
+        subscription="transfer",
+        workspace_id="workspace-1",
+        log=SimpleNamespace(
+            type="success",
+            transfer=SimpleNamespace(
+                id="transfer-2",
+                external_id="trial-transfer-invoice-2",
+                status="success",
+                updated=updated,
+            ),
+        ),
+    )
+
+    def parse(
+        content: str,
+        signature: str,
+        user: starkbank.Project | None = None,
+    ) -> object:
+        return raw
+
+    monkeypatch.setattr(starkbank.event, "parse", parse)
+
+    result = sdk_client.verify_event(b"payload", "signature")
+
+    assert isinstance(result, TransferLifecycleEvent)
+    assert result.updated_at == datetime(2026, 8, 1, 12, 5, tzinfo=UTC)
+    assert result.updated_at.tzinfo is not None
+
+
 def test_ensure_transfer_uses_exact_recipient_and_stable_external_id(
     monkeypatch: pytest.MonkeyPatch,
     sdk_client: StarkBankClient,

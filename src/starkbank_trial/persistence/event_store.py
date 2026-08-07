@@ -61,9 +61,12 @@ class EventStore:
         stored_updated_at = job[0] if job is not None else None
         if stored_updated_at is not None and stored_updated_at.tzinfo is None:
             stored_updated_at = stored_updated_at.replace(tzinfo=UTC)
+        event_updated_at = event.updated_at
+        if event_updated_at.tzinfo is None:
+            event_updated_at = event_updated_at.replace(tzinfo=UTC)
         if job is None:
             outcome = EventWriteResult.TRANSFER_UNMATCHED
-        elif stored_updated_at is not None and stored_updated_at >= event.updated_at:
+        elif stored_updated_at is not None and stored_updated_at >= event_updated_at:
             outcome = EventWriteResult.TRANSFER_STALE
         else:
             outcome = EventWriteResult.TRANSFER_UPDATED
