@@ -32,7 +32,14 @@ sudo make vps-release \
 
 If GitHub Actions cannot publish while the source repository remains available, a maintainer may
 build the exact public commit for `linux/amd64` and push it to the explicitly allowed Docker Hub
-fallback. Use the resulting digest in both commands:
+fallback. Docker Hub authentication is local to the operator's credential helper:
+
+```bash
+docker login docker.io
+make image-push CONFIRM_PUSH=yes
+```
+
+Use the resulting digest in both commands:
 
 ```bash
 sudo make vps-verify-image \

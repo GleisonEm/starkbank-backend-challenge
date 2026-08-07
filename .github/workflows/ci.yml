@@ -59,7 +59,7 @@ jobs:
             koalaman/shellcheck-alpine:v0.10.0@sha256:5921d946dac740cbeec2fb1c898747b6105e585130cc7f0602eec9a10f7ddb63 \
             shellcheck -x infra/local/keygen.sh infra/local/tunnel-url.sh \
             infra/local/validate-env.sh infra/vps/backup.sh infra/vps/config-check.sh \
-            infra/vps/health.sh infra/vps/install-secrets.sh infra/vps/install-systemd.sh \
+            infra/vps/health.sh infra/vps/install-secrets.sh \
             infra/vps/live-mode.sh \
             infra/vps/pull-private-image.sh infra/vps/release.sh infra/vps/restore.sh \
             infra/vps/validate-secrets.sh \

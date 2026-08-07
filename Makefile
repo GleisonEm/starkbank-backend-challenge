@@ -3,10 +3,13 @@ SHELL := /bin/sh
 LOCAL_COMPOSE = docker compose --env-file .env -f compose.yaml -p starkbank-trial-local
 TEST_COMPOSE = docker compose -f compose.test.yaml -p starkbank-trial-test
 VPS_COMPOSE = docker compose --env-file /etc/starkbank-trial/vps.env -f compose.vps.yaml -p starkbank-trial-vps
+IMAGE_REPOSITORY ?= docker.io/gemanueldev/starkbank-backend-challenge
+SOURCE_SHA ?= $(shell git rev-parse HEAD)
+IMAGE_TAG ?= sha-$(SOURCE_SHA)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help env-init keygen validate-env build up down restart health ps logs logs-webhook \
+.PHONY: help env-init keygen validate-env build image-push up down restart health ps logs logs-webhook \
 	test check tunnel tunnel-url tunnel-down sandbox-check webhook-setup webhook-list webhook-cleanup \
 	smoke-invoice smoke-batch trial-start trial-status reset vps-config-check vps-secrets vps-pull \
 	vps-deploy vps-up vps-down vps-health vps-status vps-trial-status vps-logs \
@@ -16,6 +19,7 @@ VPS_COMPOSE = docker compose --env-file /etc/starkbank-trial/vps.env -f compose.
 help:
 	@printf '%s\n' \
 		'Local: env-init keygen validate-env build up down restart health ps logs logs-webhook' \
+		'Image: image-push CONFIRM_PUSH=yes [IMAGE_REPOSITORY=...]' \
 		'Checks: test check' \
 		'Tunnel: tunnel tunnel-url tunnel-down' \
 		'Sandbox: sandbox-check webhook-setup webhook-list webhook-cleanup smoke-invoice smoke-batch trial-start trial-status' \
@@ -38,6 +42,16 @@ validate-env:
 
 build:
 	docker build --target runtime --tag starkbank-trial:local .
+
+image-push:
+	@test "$(CONFIRM_PUSH)" = yes || { printf 'Pass CONFIRM_PUSH=yes to publish an image.\n' >&2; exit 1; }
+	@test -z "$$(git status --porcelain)" || { printf 'Working tree must be clean before publishing.\n' >&2; exit 1; }
+	@test "$$(printf '%s' "$(SOURCE_SHA)" | wc -c | tr -d ' ')" -eq 40 || { printf 'SOURCE_SHA must contain 40 characters.\n' >&2; exit 1; }
+	@case "$(SOURCE_SHA)" in *[!0-9a-f]*) printf 'SOURCE_SHA must be lowercase hexadecimal.\n' >&2; exit 1 ;; esac
+	docker buildx build --platform linux/amd64 --target runtime \
+		--label "org.opencontainers.image.revision=$(SOURCE_SHA)" \
+		--label "org.opencontainers.image.source=https://github.com/GleisonEm/starkbank-backend-challenge" \
+		--tag "$(IMAGE_REPOSITORY):$(IMAGE_TAG)" --push .
 
 up: validate-env
 	$(LOCAL_COMPOSE) up --detach --wait --wait-timeout 180 postgres migrate api worker scheduler

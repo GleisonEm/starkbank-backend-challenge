@@ -51,6 +51,21 @@ make health
 make test
 ```
 
+## Manual image publication
+
+The evaluator does not need registry credentials to run the local stack. If you need to publish
+an amd64 image manually, log in through Docker's credential helper and publish only from a clean
+commit:
+
+```bash
+docker login docker.io
+make image-push CONFIRM_PUSH=yes
+```
+
+The command prints the immutable digest returned by the registry. Never put a Docker Hub token in
+`.env`, a workflow file, the repository, an image layer or a command argument. A reviewer can use
+their own Docker credentials, or pull the public image by digest when the repository is public.
+
 `make build`, `make up` and every unprefixed lifecycle command always target local Docker.
 `make test` is Docker-only, creates an isolated test database and requires no Stark Bank
 credentials. No build, test or startup command creates Invoices, Webhooks or Transfers.

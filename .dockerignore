@@ -1,5 +1,6 @@
 .agents
 .codex
+.local
 .git
 .github
 .mypy_cache

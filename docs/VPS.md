@@ -153,14 +153,11 @@ clients normally omit SNI when connecting to an IP address. Caddy proxies only t
 [Let's Encrypt IP address certificates](https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability.html)
 and the [Caddy TLS directive](https://caddyserver.com/docs/caddyfile/directives/tls).
 
-Install boot and backup units after the first successful deployment:
-
-```bash
-sudo ./infra/vps/install-systemd.sh
-sudo systemctl start starkbank-trial.service
-sudo systemctl start starkbank-trial-backup.timer
-systemctl list-timers starkbank-trial-backup.timer
-```
+The official review VPS already has its boot and backup systemd units installed. Routine operation
+uses the Compose-backed `make vps-up`, `make vps-down`, `make vps-backup` and `make vps-restore`
+commands documented in [`OPERATIONS.md`](OPERATIONS.md). The one-time host bootstrap units are
+kept only in the maintainer's ignored `.local/vps-bootstrap/` archive and are not part of the
+public application release.
 
 ## 6. Temporary evaluator account
 
