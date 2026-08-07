@@ -68,6 +68,12 @@ class ProviderWebhook:
     subscriptions: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class WebhookInspection:
+    active: ProviderWebhook | None
+    stale: tuple[ProviderWebhook, ...]
+
+
 class TransferProvider(Protocol):
     def ensure_transfer(self, command: TransferCommand) -> ProviderTransfer: ...
 

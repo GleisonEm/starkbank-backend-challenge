@@ -15,7 +15,7 @@ IMAGE_TAG ?= sha-$(SOURCE_SHA)
 	vps-deploy vps-up vps-down vps-health vps-status vps-trial-status vps-logs \
 	vps-auth-pull vps-release vps-verify-image vps-backup vps-restore vps-rollback \
 	vps-smoke-batch vps-trial-start vps-transfer-status-sync vps-live-enable vps-live-disable vps-live-status \
-	vps-configure-review-api
+	vps-webhook-setup vps-webhook-cleanup vps-configure-review-api
 
 help:
 	@printf '%s\n' \
@@ -27,7 +27,8 @@ help:
 		'VPS: vps-config-check vps-secrets vps-pull vps-deploy vps-up vps-down vps-health' \
 		'     vps-status vps-trial-status vps-logs vps-release vps-verify-image' \
 		'     vps-auth-pull vps-backup vps-restore vps-rollback' \
-		'     vps-smoke-batch vps-trial-start vps-live-enable vps-live-disable vps-configure-review-api'
+		'     vps-smoke-batch vps-trial-start vps-live-enable vps-live-disable vps-configure-review-api' \
+		'     vps-webhook-setup vps-webhook-cleanup vps-transfer-status-sync'
 
 env-init:
 	@test ! -e .env || { printf '.env already exists; refusing to overwrite it.\n' >&2; exit 1; }
@@ -177,6 +178,10 @@ vps-trial-start: vps-config-check
 
 vps-transfer-status-sync: vps-config-check
 	$(VPS_COMPOSE) run --rm scheduler starkbank-trial provider sync-transfer-statuses
+
+vps-webhook-setup: vps-config-check
+	@test "$(CONFIRM_SANDBOX)" = yes || { printf 'Pass CONFIRM_SANDBOX=yes.\n' >&2; exit 1; }
+	$(VPS_COMPOSE) run --rm scheduler starkbank-trial provider setup-webhook
 
 vps-webhook-cleanup: vps-config-check
 	@test "$(CONFIRM_SANDBOX)" = yes || { printf 'Pass CONFIRM_SANDBOX=yes.\n' >&2; exit 1; }

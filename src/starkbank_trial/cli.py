@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Annotated, NoReturn, cast
 from uuid import NAMESPACE_URL, uuid5
 
+import structlog
 import typer
 from alembic import command
 from alembic.config import Config
@@ -15,11 +16,14 @@ from starkbank_trial.application.payers import build_smoke_invoice
 from starkbank_trial.application.smoke import SmokeBatchService
 from starkbank_trial.bootstrap import Services, build_client, build_services
 from starkbank_trial.config import Settings
+from starkbank_trial.domain.constants import WEBHOOK_SUBSCRIPTIONS
 from starkbank_trial.domain.errors import LiveOperationsDisabledError
 from starkbank_trial.domain.provider import ProviderError
 from starkbank_trial.domain.transfer import build_transfer_command
 from starkbank_trial.logging import configure_logging
 from starkbank_trial.persistence.review_store import ReviewStore
+
+logger = structlog.get_logger()
 
 app = typer.Typer(no_args_is_help=True)
 db_app = typer.Typer(no_args_is_help=True)
@@ -42,7 +46,7 @@ def _services() -> Services:
     return build_services(settings)
 
 
-def _write_result(result: StrEnum | dict[str, str | int]) -> None:
+def _write_result(result: StrEnum | dict[str, object]) -> None:
     payload = {"result": result.value} if isinstance(result, StrEnum) else result
     typer.echo(json.dumps(payload, sort_keys=True))
 
@@ -118,10 +122,23 @@ def provider_setup_webhook() -> None:
     webhook_config = settings.webhook_config()
     url = f"{str(webhook_config.public_base_url).rstrip('/')}/webhooks/starkbank"
     try:
-        webhook = build_client(settings).ensure_webhook(url)
+        client = build_client(settings)
+        before = client.inspect_webhooks(url)
+        webhook = client.ensure_webhook(url)
     except (ProviderError, LiveOperationsDisabledError) as error:
         _exit_provider_error(error)
-    _write_result({"webhook_id": webhook.id, "url": webhook.url})
+    result: dict[str, object] = {
+        "webhook_id": webhook.id,
+        "url": webhook.url,
+        "subscriptions": sorted(WEBHOOK_SUBSCRIPTIONS),
+    }
+    if before.stale:
+        result["replaced_webhook_ids"] = [stale.id for stale in before.stale]
+        result["notice"] = (
+            "the previous webhook for this URL was incomplete and was replaced; "
+            "delivery resumes with the complete webhook"
+        )
+    _write_result(result)
 
 
 @provider_app.command("list-webhooks")
@@ -189,31 +206,22 @@ def provider_cleanup_webhooks(
     target_url = f"{str(webhook_config.public_base_url).rstrip('/')}/webhooks/starkbank"
     client = build_client(settings)
     try:
-        webhooks = client.list_webhooks()
-        matching = [webhook for webhook in webhooks if webhook.url == target_url]
-        valid = [
-            webhook for webhook in matching if set(webhook.subscriptions) == {"invoice", "transfer"}
-        ]
-        keep = valid[0] if valid else None
-        removed = 0
-        for webhook in webhooks:
-            if keep is not None and webhook.id == keep.id:
-                continue
-            client.delete_webhook(webhook.id)
-            removed += 1
-        if keep is None:
-            keep = client.ensure_webhook(target_url)
+        inspection = client.inspect_webhooks(target_url)
+        replaced: list[str] = []
+        if inspection.active is None:
+            replaced = [stale.id for stale in inspection.stale]
+            active = client.ensure_webhook(target_url)
+        else:
+            active = inspection.active
     except (ProviderError, LiveOperationsDisabledError) as error:
         _exit_provider_error(error)
-    typer.echo(
-        json.dumps(
-            {
-                "active_url": keep.url,
-                "removed": removed,
-                "subscriptions": ["invoice", "transfer"],
-            },
-            sort_keys=True,
-        )
+    _write_result(
+        {
+            "active_url": active.url,
+            "active_id": active.id,
+            "replaced_webhook_ids": replaced,
+            "subscriptions": sorted(WEBHOOK_SUBSCRIPTIONS),
+        }
     )
 
 
@@ -287,6 +295,20 @@ def worker_once() -> None:
 @worker_app.command("run")
 def worker_run(poll_seconds: float = typer.Option(default=1.0, min=0.1)) -> None:
     services = _services()
+    settings = Settings()
+    if settings.starkbank_sandbox_live_enabled:
+        webhook_config = settings.webhook_config()
+        url = f"{str(webhook_config.public_base_url).rstrip('/')}/webhooks/starkbank"
+        provider = services.provider
+        if provider is not None:
+            try:
+                provider.ensure_webhook(url)
+            except (ProviderError, LiveOperationsDisabledError) as error:
+                logger.warning(
+                    "webhook_preflight_failed",
+                    operation=error.operation,
+                    url=url,
+                )
     while True:
         result = services.worker.process_one()
         if result.value == "idle":

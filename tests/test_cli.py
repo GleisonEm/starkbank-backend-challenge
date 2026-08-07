@@ -24,6 +24,7 @@ from starkbank_trial.domain.provider import (
     ProviderPermanentError,
     ProviderTransfer,
     ProviderWebhook,
+    WebhookInspection,
 )
 from starkbank_trial.domain.types import EventId, InvoiceId, TransferId
 from starkbank_trial.persistence.schema import metadata
@@ -64,6 +65,19 @@ class FakeGateway:
                 subscriptions=("invoice",),
             ),
         )
+
+    def inspect_webhooks(self, url: str) -> WebhookInspection:
+        matching = [webhook for webhook in self.list_webhooks() if webhook.url == url]
+        active = next(
+            (
+                webhook
+                for webhook in matching
+                if set(webhook.subscriptions) == {"invoice", "transfer"}
+            ),
+            None,
+        )
+        stale = tuple(webhook for webhook in matching if webhook is not active)
+        return WebhookInspection(active=active, stale=stale)
 
 
 @pytest.fixture
@@ -146,7 +160,7 @@ def test_provider_list_webhooks_emits_safe_machine_readable_results(
     }
 
 
-def test_provider_cleanup_webhooks_keeps_invoice_and_transfer_subscription(
+def test_provider_cleanup_webhooks_replaces_incomplete_webhook_for_target_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class CleanupGateway(FakeGateway):
@@ -157,13 +171,13 @@ def test_provider_cleanup_webhooks_keeps_invoice_and_transfer_subscription(
         def list_webhooks(self) -> tuple[ProviderWebhook, ...]:
             return (
                 ProviderWebhook(
-                    id="webhook-old",
-                    url="https://old.example.com/webhooks/starkbank",
+                    id="webhook-stale",
+                    url="https://trial.example.com/webhooks/starkbank",
                     subscriptions=("invoice",),
                 ),
                 ProviderWebhook(
-                    id="webhook-wrong",
-                    url="https://trial.example.com/webhooks/starkbank",
+                    id="webhook-other-url",
+                    url="https://old.example.com/webhooks/starkbank",
                     subscriptions=("invoice", "transfer"),
                 ),
             )
@@ -172,7 +186,10 @@ def test_provider_cleanup_webhooks_keeps_invoice_and_transfer_subscription(
             self.deleted.append(webhook_id)
 
         def ensure_webhook(self, url: str) -> ProviderWebhook:
-            return ProviderWebhook("webhook-new", url, ("invoice",))
+            for stale in self.list_webhooks():
+                if stale.url == url:
+                    self.delete_webhook(stale.id)
+            return ProviderWebhook("webhook-active", url, ("invoice", "transfer"))
 
     gateway = CleanupGateway()
     monkeypatch.setenv("STARKBANK_SANDBOX_LIVE_ENABLED", "true")
@@ -189,11 +206,88 @@ def test_provider_cleanup_webhooks_keeps_invoice_and_transfer_subscription(
     )
 
     assert result.exit_code == 0
-    assert gateway.deleted == ["webhook-old"]
+    assert gateway.deleted == ["webhook-stale"]
     assert json.loads(result.stdout) == {
         "active_url": "https://trial.example.com/webhooks/starkbank",
-        "removed": 1,
+        "active_id": "webhook-active",
+        "replaced_webhook_ids": ["webhook-stale"],
         "subscriptions": ["invoice", "transfer"],
+    }
+
+
+def test_provider_cleanup_webhooks_is_noop_when_active_webhook_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CleanupGateway(FakeGateway):
+        def list_webhooks(self) -> tuple[ProviderWebhook, ...]:
+            return (
+                ProviderWebhook(
+                    id="webhook-active",
+                    url="https://trial.example.com/webhooks/starkbank",
+                    subscriptions=("invoice", "transfer"),
+                ),
+            )
+
+    gateway = CleanupGateway()
+    monkeypatch.setenv("STARKBANK_SANDBOX_LIVE_ENABLED", "true")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://trial.example.com")
+
+    def fixed_client(settings: Settings) -> CleanupGateway:
+        return gateway
+
+    monkeypatch.setattr(cli_module, "build_client", fixed_client)
+
+    result = CliRunner().invoke(
+        cli_module.app,
+        ["provider", "cleanup-webhooks", "--confirm-sandbox"],
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {
+        "active_url": "https://trial.example.com/webhooks/starkbank",
+        "active_id": "webhook-active",
+        "replaced_webhook_ids": [],
+        "subscriptions": ["invoice", "transfer"],
+    }
+
+
+def test_provider_setup_webhook_reports_replaced_incomplete_webhook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SetupGateway(FakeGateway):
+        def list_webhooks(self) -> tuple[ProviderWebhook, ...]:
+            return (
+                ProviderWebhook(
+                    id="webhook-stale",
+                    url="https://trial.example.com/webhooks/starkbank",
+                    subscriptions=("invoice",),
+                ),
+            )
+
+        def ensure_webhook(self, url: str) -> ProviderWebhook:
+            return ProviderWebhook("webhook-active", url, ("invoice", "transfer"))
+
+    gateway = SetupGateway()
+    monkeypatch.setenv("STARKBANK_SANDBOX_LIVE_ENABLED", "true")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://trial.example.com")
+
+    def fixed_client(settings: Settings) -> SetupGateway:
+        return gateway
+
+    monkeypatch.setattr(cli_module, "build_client", fixed_client)
+
+    result = CliRunner().invoke(cli_module.app, ["provider", "setup-webhook"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {
+        "webhook_id": "webhook-active",
+        "url": "https://trial.example.com/webhooks/starkbank",
+        "subscriptions": ["invoice", "transfer"],
+        "replaced_webhook_ids": ["webhook-stale"],
+        "notice": (
+            "the previous webhook for this URL was incomplete and was replaced; "
+            "delivery resumes with the complete webhook"
+        ),
     }
 
 

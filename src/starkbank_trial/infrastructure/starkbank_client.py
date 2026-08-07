@@ -15,6 +15,7 @@ from starkbank.error import (
     UnknownError,
 )
 
+from starkbank_trial.domain.constants import WEBHOOK_SUBSCRIPTIONS
 from starkbank_trial.domain.errors import LiveOperationsDisabledError
 from starkbank_trial.domain.events import (
     CreditedInvoiceEvent,
@@ -32,6 +33,7 @@ from starkbank_trial.domain.provider import (
     ProviderUnknownOutcomeError,
     ProviderWebhook,
     UnexpectedWorkspaceError,
+    WebhookInspection,
 )
 from starkbank_trial.domain.types import Cents, EventId, ExternalId, InvoiceId, TransferId
 
@@ -233,15 +235,36 @@ class StarkBankClient:
 
     def ensure_webhook(self, url: str) -> ProviderWebhook:
         self._require_live("ensure_webhook")
-        for existing in self.list_webhooks():
-            if existing.url == url and set(existing.subscriptions) == {"invoice", "transfer"}:
-                return existing
+        inspection = self.inspect_webhooks(url)
+        if inspection.active is not None:
+            return inspection.active
+        for stale in inspection.stale:
+            self.delete_webhook(stale.id)
         try:
-            created = starkbank.webhook.create(url, ["invoice", "transfer"], user=self.user)
+            created = starkbank.webhook.create(url, list(WEBHOOK_SUBSCRIPTIONS), user=self.user)
             webhook = _SdkWebhook.model_validate(created)
         except (StarkError, ValidationError) as error:
-            self._raise_provider(error, "ensure_webhook", unknown_outcome=True)
-        return self._provider_webhook(webhook)
+            self._raise_provider(error, "create_webhook", unknown_outcome=True)
+        return self._confirm_webhook(self._provider_webhook(webhook), url)
+
+    def inspect_webhooks(self, url: str) -> WebhookInspection:
+        matching = [webhook for webhook in self.list_webhooks() if webhook.url == url]
+        active = next(
+            (
+                webhook
+                for webhook in matching
+                if set(webhook.subscriptions) == set(WEBHOOK_SUBSCRIPTIONS)
+            ),
+            None,
+        )
+        stale = tuple(webhook for webhook in matching if webhook is not active)
+        return WebhookInspection(active=active, stale=stale)
+
+    def _confirm_webhook(self, webhook: ProviderWebhook, url: str) -> ProviderWebhook:
+        inspection = self.inspect_webhooks(url)
+        if inspection.active is not None and inspection.active.id == webhook.id:
+            return inspection.active
+        raise ProviderUnknownOutcomeError(operation="create_webhook_unconfirmed")
 
     def delete_webhook(self, webhook_id: str) -> None:
         self._require_live("delete_webhook")

@@ -10,3 +10,5 @@ STARK_BANK_RECIPIENT: Final = Recipient(
     tax_id="20.018.183/0001-80",
     account_type="payment",
 )
+
+WEBHOOK_SUBSCRIPTIONS: Final[frozenset[str]] = frozenset({"invoice", "transfer"})

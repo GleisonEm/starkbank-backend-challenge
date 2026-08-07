@@ -8,7 +8,7 @@ from starkbank.error import InputErrors
 
 from starkbank_trial.domain.events import CreditedInvoiceEvent, TransferLifecycleEvent
 from starkbank_trial.domain.invoices import InvoiceDraft
-from starkbank_trial.domain.provider import ProviderPermanentError
+from starkbank_trial.domain.provider import ProviderPermanentError, ProviderUnknownOutcomeError
 from starkbank_trial.domain.status import DraftStatus
 from starkbank_trial.domain.transfer import build_transfer_command
 from starkbank_trial.domain.types import BatchId, Cents, DraftId, InvoiceId, TransferId
@@ -255,7 +255,12 @@ def test_ensure_webhook_reuses_or_creates_invoice_and_transfer_subscription(
         ["invoice", "transfer"],
         id="webhook-existing",
     )
-    query_results = iter((iter((existing,)), iter(())))
+    created = starkbank.Webhook(
+        "https://new.example.com/webhooks/starkbank",
+        ["invoice", "transfer"],
+        id="webhook-created",
+    )
+    query_results = iter((iter((existing,)), iter(()), iter((created,))))
 
     def query(
         limit: int | None = None,
@@ -268,18 +273,132 @@ def test_ensure_webhook_reuses_or_creates_invoice_and_transfer_subscription(
         subscriptions: list[str],
         user: starkbank.Project | None = None,
     ) -> starkbank.Webhook:
-        return starkbank.Webhook(url, subscriptions, id="webhook-created")
+        return created
 
     monkeypatch.setattr(starkbank.webhook, "query", query)
     monkeypatch.setattr(starkbank.webhook, "create", create)
 
     # When
     reused = sdk_client.ensure_webhook(existing.url)
-    created = sdk_client.ensure_webhook("https://new.example.com/webhooks/starkbank")
+    created_result = sdk_client.ensure_webhook("https://new.example.com/webhooks/starkbank")
 
     # Then
     assert reused.id == "webhook-existing"
-    assert created.id == "webhook-created"
+    assert created_result.id == "webhook-created"
+
+
+def test_ensure_webhook_replaces_incomplete_subscription_before_creating(
+    monkeypatch: pytest.MonkeyPatch,
+    sdk_client: StarkBankClient,
+) -> None:
+    # Given: an invoice-only webhook exists for the URL (created before transfer support).
+    stale = starkbank.Webhook(
+        "https://trial.example.com/webhooks/starkbank",
+        ["invoice"],
+        id="webhook-stale",
+    )
+    created = starkbank.Webhook(
+        "https://trial.example.com/webhooks/starkbank",
+        ["invoice", "transfer"],
+        id="webhook-created",
+    )
+    query_results = iter((iter((stale,)), iter((created,))))
+    deleted: list[str] = []
+
+    def query(
+        limit: int | None = None,
+        user: starkbank.Project | None = None,
+    ) -> Iterator[starkbank.Webhook]:
+        return next(query_results)
+
+    def create(
+        url: str,
+        subscriptions: list[str],
+        user: starkbank.Project | None = None,
+    ) -> starkbank.Webhook:
+        return created
+
+    def delete(webhook_id: str, user: starkbank.Project | None = None) -> None:
+        deleted.append(webhook_id)
+
+    monkeypatch.setattr(starkbank.webhook, "query", query)
+    monkeypatch.setattr(starkbank.webhook, "create", create)
+    monkeypatch.setattr(starkbank.webhook, "delete", delete)
+
+    # When
+    result = sdk_client.ensure_webhook(stale.url)
+
+    # Then: the incomplete webhook is replaced by a complete one and confirmed.
+    assert deleted == ["webhook-stale"]
+    assert result.id == "webhook-created"
+    assert tuple(result.subscriptions) == ("invoice", "transfer")
+
+
+def test_ensure_webhook_raises_unknown_when_created_webhook_not_confirmed(
+    monkeypatch: pytest.MonkeyPatch,
+    sdk_client: StarkBankClient,
+) -> None:
+    created = starkbank.Webhook(
+        "https://trial.example.com/webhooks/starkbank",
+        ["invoice", "transfer"],
+        id="webhook-created",
+    )
+
+    def query(
+        limit: int | None = None,
+        user: starkbank.Project | None = None,
+    ) -> Iterator[starkbank.Webhook]:
+        return iter(())
+
+    def create(
+        url: str,
+        subscriptions: list[str],
+        user: starkbank.Project | None = None,
+    ) -> starkbank.Webhook:
+        return created
+
+    monkeypatch.setattr(starkbank.webhook, "query", query)
+    monkeypatch.setattr(starkbank.webhook, "create", create)
+
+    with pytest.raises(ProviderUnknownOutcomeError) as excinfo:
+        sdk_client.ensure_webhook(created.url)
+
+    assert excinfo.value.operation == "create_webhook_unconfirmed"
+
+
+def test_inspect_webhooks_classifies_active_and_stale(
+    monkeypatch: pytest.MonkeyPatch,
+    sdk_client: StarkBankClient,
+) -> None:
+    active = starkbank.Webhook(
+        "https://trial.example.com/webhooks/starkbank",
+        ["invoice", "transfer"],
+        id="webhook-active",
+    )
+    stale = starkbank.Webhook(
+        "https://trial.example.com/webhooks/starkbank",
+        ["invoice"],
+        id="webhook-stale",
+    )
+    other_url = starkbank.Webhook(
+        "https://other.example.com/webhooks/starkbank",
+        ["invoice"],
+        id="webhook-other-url",
+    )
+
+    def query(
+        limit: int | None = None,
+        user: starkbank.Project | None = None,
+    ) -> Iterator[starkbank.Webhook]:
+        return iter((active, stale, other_url))
+
+    monkeypatch.setattr(starkbank.webhook, "query", query)
+
+    inspection = sdk_client.inspect_webhooks(active.url)
+
+    assert inspection.active is not None
+    assert inspection.active.id == "webhook-active"
+    assert tuple(w.id for w in inspection.stale) == ("webhook-stale",)
 
 
 def test_ensure_webhook_reuses_complete_transfer_subscription(
