@@ -41,7 +41,7 @@ rollback() {
     install -m 0644 -o root -g root "$rollback_env" "$VPS_ENV_FILE"
     rm -f "$rollback_env"
     compose up --detach --wait --wait-timeout 120 postgres migrate api worker scheduler caddy || true
-    compose up --detach --force-recreate --no-deps caddy || true
+    compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile || true
 }
 
 "$SCRIPT_DIR/config-check.sh" >/dev/null
@@ -54,7 +54,7 @@ if ! compose up --detach --wait --wait-timeout 180 postgres migrate api worker s
     rollback
     fail "deployment failed; previous APP_IMAGE was restored"
 fi
-if ! compose up --detach --force-recreate --no-deps caddy; then
+if ! compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile; then
     rollback
     fail "proxy reload failed; previous APP_IMAGE was restored"
 fi

@@ -143,9 +143,13 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      image_digest: ${{ steps.publish.outputs.image_digest }}
+      source_sha: ${{ steps.publish.outputs.source_sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Build and publish immutable source tag
+        id: publish
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -160,5 +164,19 @@ jobs:
           printf '%s\n' "$push_output"
           digest=$(printf '%s\n' "$push_output" | awk '/digest:/ {print $3}' | tail -n 1)
           test -n "$digest"
+          printf 'image_digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          printf 'source_sha=%s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
           printf "### Published image\n\n\`%s@%s\`\n\nSource: \`%s\`\n" \
             "$image" "$digest" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: publish
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/deploy.yml
+    with:
+      image_digest: ${{ needs.publish.outputs.image_digest }}
+      source_sha: ${{ needs.publish.outputs.source_sha }}
+    secrets: inherit

@@ -1,6 +1,16 @@
 name: deploy-vps
 
 on:
+  workflow_call:
+    inputs:
+      image_digest:
+        description: Published image digest, including sha256 prefix
+        required: true
+        type: string
+      source_sha:
+        description: Full 40-character source commit published in the image
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       image_digest:
