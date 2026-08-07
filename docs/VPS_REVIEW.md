@@ -1,6 +1,7 @@
 # VPS reviewer guide
 
-Connect using your own SSH key:
+Connect with the reviewer password (sent separately by the owner). Password auth is protected by
+fail2ban (5 failures in 10 minutes bans the IP for 1 hour), and root has key-only login:
 
 ```bash
 ssh reviewer@159.223.160.99

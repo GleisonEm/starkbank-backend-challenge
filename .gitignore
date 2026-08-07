@@ -2,6 +2,9 @@
 .codegraph
 .codex/
 .local/
+.opencode/
+AGENTS.md
+CONTEXT.md
 .env
 .env.*
 !.env.example
