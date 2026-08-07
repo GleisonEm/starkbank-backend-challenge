@@ -60,6 +60,7 @@ jobs:
             shellcheck -x infra/local/starkbank-keygen.sh infra/local/tunnel-url.sh \
             infra/local/validate-env.sh infra/vps/backup.sh infra/vps/config-check.sh \
             infra/vps/health.sh infra/vps/install-secrets.sh \
+            infra/vps/configure-review-api.sh \
             infra/vps/live-mode.sh \
             infra/vps/pull-private-image.sh infra/vps/release.sh infra/vps/restore.sh \
             infra/vps/validate-secrets.sh \
@@ -84,6 +85,10 @@ jobs:
           sudo install -d -m 0750 -o root -g root /etc/starkbank-trial
           sudo install -m 0644 -o root -g root /tmp/starkbank-vps.env \
             /etc/starkbank-trial/vps.env
+          sudo ./infra/vps/configure-review-api.sh false
+          grep --quiet '^REVIEW_API_ENABLED=false$$' /etc/starkbank-trial/vps.env
+          sudo ./infra/vps/configure-review-api.sh true
+          grep --quiet '^REVIEW_API_ENABLED=true$$' /etc/starkbank-trial/vps.env
           secret_input=$(mktemp -d)
           trap 'rm -rf "$secret_input"' EXIT HUP INT TERM
           printf '123456789' > "$secret_input/project-id"

@@ -14,7 +14,8 @@ IMAGE_TAG ?= sha-$(SOURCE_SHA)
 	smoke-invoice smoke-batch trial-start trial-status transfer-status-sync reset vps-config-check vps-secrets vps-pull \
 	vps-deploy vps-up vps-down vps-health vps-status vps-trial-status vps-logs \
 	vps-auth-pull vps-release vps-verify-image vps-backup vps-restore vps-rollback \
-	vps-smoke-batch vps-trial-start vps-transfer-status-sync vps-live-enable vps-live-disable vps-live-status
+	vps-smoke-batch vps-trial-start vps-transfer-status-sync vps-live-enable vps-live-disable vps-live-status \
+	vps-configure-review-api
 
 help:
 	@printf '%s\n' \
@@ -26,7 +27,7 @@ help:
 		'VPS: vps-config-check vps-secrets vps-pull vps-deploy vps-up vps-down vps-health' \
 		'     vps-status vps-trial-status vps-logs vps-release vps-verify-image' \
 		'     vps-auth-pull vps-backup vps-restore vps-rollback' \
-		'     vps-smoke-batch vps-trial-start vps-live-enable vps-live-disable'
+		'     vps-smoke-batch vps-trial-start vps-live-enable vps-live-disable vps-configure-review-api'
 
 env-init:
 	@test ! -e .env || { printf '.env already exists; refusing to overwrite it.\n' >&2; exit 1; }
@@ -190,6 +191,10 @@ vps-live-disable: vps-config-check
 
 vps-live-status: vps-config-check
 	@awk -F= '$$1 == "STARKBANK_SANDBOX_LIVE_ENABLED" {print $$2}' /etc/starkbank-trial/vps.env
+
+vps-configure-review-api:
+	@test -n "$(REVIEW_API_ENABLED)" || { printf 'Pass REVIEW_API_ENABLED=true or false.\n' >&2; exit 1; }
+	./infra/vps/configure-review-api.sh "$(REVIEW_API_ENABLED)"
 
 vps-logs: vps-config-check
 	$(VPS_COMPOSE) logs --follow --tail=200

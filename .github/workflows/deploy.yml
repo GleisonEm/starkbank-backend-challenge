@@ -42,6 +42,7 @@ jobs:
           GHCR_IMAGE: ${{ vars.GHCR_IMAGE }}
           PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
           PUBLIC_HOST: ${{ vars.PUBLIC_HOST }}
+          REVIEW_API_ENABLED: ${{ vars.REVIEW_API_ENABLED }}
           VPS_HOST: ${{ vars.VPS_HOST }}
           VPS_KNOWN_HOSTS: ${{ vars.VPS_KNOWN_HOSTS }}
           VPS_USER: ${{ vars.VPS_USER }}
@@ -52,6 +53,7 @@ jobs:
           test -n "$VPS_HOST"
           test -n "$VPS_KNOWN_HOSTS"
           test -n "$VPS_USER"
+          test "$REVIEW_API_ENABLED" = "true"
       - name: Validate immutable release inputs
         env:
           IMAGE_DIGEST: ${{ inputs.image_digest }}
@@ -116,6 +118,18 @@ jobs:
         run: |
           image="$GHCR_IMAGE@$IMAGE_DIGEST"
           remote_command="sudo make -C /opt/starkbank-trial vps-verify-image RELEASE_IMAGE=$image RELEASE_SOURCE_SHA=$SOURCE_SHA"
+          ssh -o BatchMode=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/starkbank-ssh/known_hosts" \
+            -i "$RUNNER_TEMP/starkbank-ssh/id_ed25519" \
+            "$VPS_USER@$VPS_HOST" "$remote_command"
+      - name: Synchronize review API configuration
+        env:
+          REVIEW_API_ENABLED: ${{ vars.REVIEW_API_ENABLED }}
+          VPS_HOST: ${{ vars.VPS_HOST }}
+          VPS_USER: ${{ vars.VPS_USER }}
+          VPS_KNOWN_HOSTS: ${{ vars.VPS_KNOWN_HOSTS }}
+        run: |
+          remote_command="sudo make -C /opt/starkbank-trial vps-configure-review-api REVIEW_API_ENABLED=$REVIEW_API_ENABLED"
           ssh -o BatchMode=yes \
             -o UserKnownHostsFile="$RUNNER_TEMP/starkbank-ssh/known_hosts" \
             -i "$RUNNER_TEMP/starkbank-ssh/id_ed25519" \
