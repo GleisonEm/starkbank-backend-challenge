@@ -52,13 +52,18 @@ runtime_env="$SECRETS_DIR/runtime.env"
     fail "$runtime_env must contain one DATABASE_URL"
 [ "$(grep -c '^STARKBANK_PROJECT_ID=' "$runtime_env")" -eq 1 ] || \
     fail "$runtime_env must contain one STARKBANK_PROJECT_ID"
-[ "$(wc -l < "$runtime_env" | tr -d ' ')" -eq 2 ] || \
-    fail "$runtime_env must contain only DATABASE_URL and STARKBANK_PROJECT_ID"
+[ "$(grep -c '^REVIEW_API_TOKEN=' "$runtime_env")" -eq 1 ] || \
+    fail "$runtime_env must contain one REVIEW_API_TOKEN"
+[ "$(wc -l < "$runtime_env" | tr -d ' ')" -eq 3 ] || \
+    fail "$runtime_env must contain only DATABASE_URL, STARKBANK_PROJECT_ID and REVIEW_API_TOKEN"
 
 project_id=$(config_value "$runtime_env" STARKBANK_PROJECT_ID)
 case "$project_id" in
     ''|*[!0-9]*) fail "STARKBANK_PROJECT_ID must contain only digits" ;;
 esac
+
+review_api_token=$(config_value "$runtime_env" REVIEW_API_TOKEN)
+[ "${#review_api_token}" -ge 32 ] || fail "stored review API token is too short"
 
 postgres_password=$(command cat "$SECRETS_DIR/postgres-password")
 case "$postgres_password" in

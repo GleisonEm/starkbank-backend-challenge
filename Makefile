@@ -9,16 +9,16 @@ IMAGE_TAG ?= sha-$(SOURCE_SHA)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help env-init keygen validate-env build image-push up down restart health ps logs logs-webhook \
+.PHONY: help env-init starkbank-keygen validate-env build image-push up down restart health ps logs logs-webhook \
 	test check tunnel tunnel-url tunnel-down sandbox-check webhook-setup webhook-list webhook-cleanup \
-	smoke-invoice smoke-batch trial-start trial-status reset vps-config-check vps-secrets vps-pull \
+	smoke-invoice smoke-batch trial-start trial-status transfer-status-sync reset vps-config-check vps-secrets vps-pull \
 	vps-deploy vps-up vps-down vps-health vps-status vps-trial-status vps-logs \
 	vps-auth-pull vps-release vps-verify-image vps-backup vps-restore vps-rollback \
-	vps-smoke-batch vps-trial-start vps-live-enable vps-live-disable vps-live-status
+	vps-smoke-batch vps-trial-start vps-transfer-status-sync vps-live-enable vps-live-disable vps-live-status
 
 help:
 	@printf '%s\n' \
-		'Local: env-init keygen validate-env build up down restart health ps logs logs-webhook' \
+		'Local: env-init starkbank-keygen validate-env build up down restart health ps logs logs-webhook' \
 		'Image: image-push CONFIRM_PUSH=yes [IMAGE_REPOSITORY=...]' \
 		'Checks: test check' \
 		'Tunnel: tunnel tunnel-url tunnel-down' \
@@ -33,8 +33,8 @@ env-init:
 	cp .env.example .env
 	@printf 'Created .env. Set credentials before make up.\n'
 
-keygen:
-	./infra/local/keygen.sh
+starkbank-keygen:
+	./infra/local/starkbank-keygen.sh
 
 validate-env:
 	./infra/local/validate-env.sh app
@@ -127,6 +127,9 @@ trial-start: sandbox-check
 trial-status: validate-env
 	$(LOCAL_COMPOSE) run --rm scheduler starkbank-trial trial status
 
+transfer-status-sync: validate-env
+	$(LOCAL_COMPOSE) run --rm scheduler starkbank-trial provider sync-transfer-statuses
+
 reset:
 	@test "$(CONFIRM_RESET)" = yes || { printf 'Pass CONFIRM_RESET=yes; this deletes local volumes.\n' >&2; exit 1; }
 	$(LOCAL_COMPOSE) --profile tunnel down --volumes --remove-orphans
@@ -170,6 +173,9 @@ vps-smoke-batch: vps-config-check
 vps-trial-start: vps-config-check
 	@test "$(CONFIRM_SANDBOX)" = yes || { printf 'Pass CONFIRM_SANDBOX=yes.\n' >&2; exit 1; }
 	$(VPS_COMPOSE) run --rm scheduler starkbank-trial trial start
+
+vps-transfer-status-sync: vps-config-check
+	$(VPS_COMPOSE) run --rm scheduler starkbank-trial provider sync-transfer-statuses
 
 vps-webhook-cleanup: vps-config-check
 	@test "$(CONFIRM_SANDBOX)" = yes || { printf 'Pass CONFIRM_SANDBOX=yes.\n' >&2; exit 1; }

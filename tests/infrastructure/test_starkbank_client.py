@@ -6,7 +6,7 @@ import pytest
 import starkbank
 from starkbank.error import InputErrors
 
-from starkbank_trial.domain.events import CreditedInvoiceEvent
+from starkbank_trial.domain.events import CreditedInvoiceEvent, TransferLifecycleEvent
 from starkbank_trial.domain.invoices import InvoiceDraft
 from starkbank_trial.domain.provider import ProviderPermanentError
 from starkbank_trial.domain.status import DraftStatus
@@ -97,6 +97,45 @@ def test_verify_event_maps_credited_invoice_from_signed_sdk_event(
     assert event.invoice_id == InvoiceId("invoice-1")
     assert event.amount == Cents(10_000)
     assert event.fee == Cents(50)
+
+
+def test_verify_event_maps_transfer_lifecycle_from_signed_sdk_event(
+    monkeypatch: pytest.MonkeyPatch,
+    sdk_client: StarkBankClient,
+) -> None:
+    updated = datetime(2026, 8, 1, 12, 5, tzinfo=UTC)
+    raw = SimpleNamespace(
+        id="event-transfer-1",
+        subscription="transfer",
+        workspace_id="workspace-1",
+        log=SimpleNamespace(
+            type="success",
+            transfer=SimpleNamespace(
+                id="transfer-1",
+                external_id="trial-transfer-invoice-1",
+                status="success",
+                updated=updated,
+            ),
+        ),
+    )
+
+    def parse(
+        content: str,
+        signature: str,
+        user: starkbank.Project | None = None,
+    ) -> object:
+        return raw
+
+    monkeypatch.setattr(starkbank.event, "parse", parse)
+
+    result = sdk_client.verify_event(b"payload", "signature")
+
+    assert isinstance(result, TransferLifecycleEvent)
+    assert result.transfer_id == "transfer-1"
+    assert result.external_id == "trial-transfer-invoice-1"
+    assert result.status == "success"
+    assert result.log_type == "success"
+    assert result.updated_at == updated
 
 
 def test_ensure_transfer_uses_exact_recipient_and_stable_external_id(
@@ -206,14 +245,14 @@ def test_ensure_transfer_reuses_remote_transfer(
     assert result.id == TransferId("transfer-existing")
 
 
-def test_ensure_webhook_reuses_or_creates_invoice_subscription(
+def test_ensure_webhook_reuses_or_creates_invoice_and_transfer_subscription(
     monkeypatch: pytest.MonkeyPatch,
     sdk_client: StarkBankClient,
 ) -> None:
     # Given
     existing = starkbank.Webhook(
         "https://trial.example.com/webhooks/starkbank",
-        ["invoice"],
+        ["invoice", "transfer"],
         id="webhook-existing",
     )
     query_results = iter((iter((existing,)), iter(())))
@@ -243,7 +282,7 @@ def test_ensure_webhook_reuses_or_creates_invoice_subscription(
     assert created.id == "webhook-created"
 
 
-def test_ensure_webhook_does_not_reuse_transfer_subscription(
+def test_ensure_webhook_reuses_complete_transfer_subscription(
     monkeypatch: pytest.MonkeyPatch,
     sdk_client: StarkBankClient,
 ) -> None:
@@ -254,7 +293,7 @@ def test_ensure_webhook_does_not_reuse_transfer_subscription(
     )
     created = starkbank.Webhook(
         "https://trial.example.com/webhooks/starkbank",
-        ["invoice"],
+        ["invoice", "transfer"],
         id="webhook-created",
     )
 
@@ -276,7 +315,7 @@ def test_ensure_webhook_does_not_reuse_transfer_subscription(
 
     result = sdk_client.ensure_webhook(existing.url)
 
-    assert result.id == "webhook-created"
+    assert result.id == "webhook-existing"
 
 
 def test_delete_webhook_calls_sdk(

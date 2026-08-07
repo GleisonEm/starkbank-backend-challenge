@@ -125,9 +125,9 @@ sudo make vps-backup
 sudo ls -lh /var/backups/starkbank-trial
 ```
 
-Backups are mode `0600`. The included systemd timer runs nightly at 03:15 UTC with jitter. Copy
-important backups off-host using an encrypted channel; local files alone do not protect against
-VPS loss.
+Backups are mode `0600`. The official review VPS has a systemd timer installed to run them nightly
+at 03:15 UTC with jitter. Copy important backups off-host using an encrypted channel; local files
+alone do not protect against VPS loss.
 
 Restore is intentionally guarded and accepts only an absolute `.dump` path under the backup
 directory:

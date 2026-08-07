@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from sqlalchemy import Engine, func, insert, select, update
@@ -11,6 +11,7 @@ from starkbank_trial.domain.events import (
     EventRecord,
     EventWriteResult,
     IgnoredEvent,
+    TransferLifecycleEvent,
 )
 from starkbank_trial.domain.status import TransferStatus
 from starkbank_trial.domain.transfer import build_transfer_command
@@ -23,8 +24,10 @@ class EventStore:
     engine: Engine
 
     def record(self, record: EventRecord) -> EventWriteResult:
-        outcome = self._initial_outcome(record)
         with self.engine.begin() as connection:
+            if isinstance(record.event, TransferLifecycleEvent):
+                return self._record_transfer_event(connection, record, record.event)
+            outcome = self._initial_outcome(record)
             if not self._insert_event(connection, record, outcome):
                 return EventWriteResult.DUPLICATE_EVENT
             if isinstance(record.event, IgnoredEvent) or record.net_amount is None:
@@ -44,6 +47,42 @@ class EventStore:
             return EventWriteResult.REJECTED
         return EventWriteResult.QUEUED
 
+    def _record_transfer_event(
+        self,
+        connection: Connection,
+        record: EventRecord,
+        event: TransferLifecycleEvent,
+    ) -> EventWriteResult:
+        job = connection.execute(
+            select(transfer_jobs.c.provider_status_updated_at).where(
+                transfer_jobs.c.external_id == event.external_id
+            )
+        ).first()
+        stored_updated_at = job[0] if job is not None else None
+        if stored_updated_at is not None and stored_updated_at.tzinfo is None:
+            stored_updated_at = stored_updated_at.replace(tzinfo=UTC)
+        if job is None:
+            outcome = EventWriteResult.TRANSFER_UNMATCHED
+        elif stored_updated_at is not None and stored_updated_at >= event.updated_at:
+            outcome = EventWriteResult.TRANSFER_STALE
+        else:
+            outcome = EventWriteResult.TRANSFER_UPDATED
+        if not self._insert_event(connection, record, outcome):
+            return EventWriteResult.DUPLICATE_EVENT
+        if outcome is EventWriteResult.TRANSFER_UPDATED:
+            connection.execute(
+                update(transfer_jobs)
+                .where(transfer_jobs.c.external_id == event.external_id)
+                .values(
+                    provider_transfer_id=event.transfer_id,
+                    provider_status=event.status,
+                    provider_log_type=event.log_type,
+                    provider_status_updated_at=event.updated_at,
+                    updated_at=record.received_at,
+                )
+            )
+        return outcome
+
     @staticmethod
     def _insert_event(
         connection: Connection,
@@ -52,6 +91,7 @@ class EventStore:
     ) -> bool:
         event = record.event
         invoice_id = event.invoice_id if isinstance(event, CreditedInvoiceEvent) else None
+        transfer_id = event.transfer_id if isinstance(event, TransferLifecycleEvent) else None
         try:
             with connection.begin_nested():
                 connection.execute(
@@ -60,6 +100,7 @@ class EventStore:
                         subscription=event.subscription,
                         log_type=event.log_type,
                         invoice_id=invoice_id,
+                        transfer_id=transfer_id,
                         workspace_id=event.workspace_id,
                         payload_hash=record.payload_hash,
                         outcome=outcome,

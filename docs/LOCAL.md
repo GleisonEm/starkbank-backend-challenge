@@ -1,16 +1,16 @@
-# Local environment
+# Run locally
 
-This path is a disposable clone on the evaluator's own computer. It cannot read
-`/etc/starkbank-trial`, does not use the VPS Compose project and never connects to the VPS
+The local setup is an independent copy of the application. It uses `compose.yaml`, its own
+`.env`, and its own `secrets/` directory. It does not read VPS files or connect to the VPS
 database.
 
-## Requirements
+## What you need
 
-- Docker Engine or Docker Desktop with Compose v2
-- GNU Make and `curl`
-- A Stark Bank Sandbox Project and its private key only for real provider operations
+- Docker with Compose v2;
+- GNU Make and `curl`;
+- a Stark Bank key only if you want to make real Sandbox calls.
 
-On macOS with Colima:
+If you are using Colima:
 
 ```bash
 colima start --cpu 2 --memory 4 --disk 30
@@ -18,106 +18,87 @@ docker version
 docker compose version
 ```
 
-## Bootstrap
+## Run the tests only
+
+The automated tests do not require Stark Bank credentials:
 
 ```bash
 git clone https://github.com/GleisonEm/starkbank-backend-challenge.git
 cd starkbank-backend-challenge
-make env-init
-mkdir -p secrets
-cp /path/to/private-key.pem secrets/private-key.pem
-chmod 600 secrets/private-key.pem
+make test
+make check
 ```
 
-Alternatively, generate a key pair after building the image:
+These commands use a temporary PostgreSQL database and a fake provider. They do not load `.env`,
+use a private key, or create an Invoice, Webhook, or Transfer.
+
+## Start the local application
+
+Create the local configuration and a key pair:
 
 ```bash
+make env-init
 make build
-make keygen
+make starkbank-keygen
 ```
 
-Upload only `secrets/public-key.pem` when creating the Sandbox Project. Never upload or commit
-`secrets/private-key.pem`.
+The command creates `secrets/private-key.pem` and `secrets/public-key.pem`. The private key stays
+on the machine and must never be committed. The public key only needs to be uploaded to Stark Bank
+if you are creating your own Sandbox Project.
 
-Edit `.env`:
+Then edit `.env`:
 
 - replace `POSTGRES_PASSWORD=change-local-password`;
-- set the numeric `STARKBANK_PROJECT_ID`;
-- set the numeric `STARKBANK_WORKSPACE_ID` for the Sandbox Project;
-- leave `PUBLIC_BASE_URL` empty until a tunnel exists;
-- leave `STARKBANK_SANDBOX_LIVE_ENABLED=false` during ordinary startup.
+- provide numeric values for `STARKBANK_PROJECT_ID` and `STARKBANK_WORKSPACE_ID`;
+- keep `STARKBANK_SANDBOX_LIVE_ENABLED=false`;
+- leave `PUBLIC_BASE_URL` empty until you have a tunnel.
 
-Then run:
+If you only want to start the application without calling Sandbox, the IDs can be numeric test
+values. For real provider calls, use the Project and Workspace from your own Sandbox account.
 
 ```bash
 make validate-env
-make build
 make up
 make health
 make ps
 ```
 
-The API is available only at `http://127.0.0.1:8787`. PostgreSQL is available only at
-`127.0.0.1:55432`. Change `API_PORT` or `POSTGRES_PORT` in `.env` if either port is occupied.
+The API is available at `http://127.0.0.1:8787` and PostgreSQL at `127.0.0.1:55432`. If either
+port is already in use, change `API_PORT` or `POSTGRES_PORT` in `.env`.
 
-## Tests and logs
+## Test the Sandbox
 
-```bash
-make test
-make check
-make logs
-make logs-webhook
-```
+When you are ready to test the real integration, run `make starkbank-keygen`, upload only
+`secrets/public-key.pem` to your Sandbox Project, and set the correct Project and Workspace IDs.
+Do not put the private key in GitHub, the README, or a Docker image.
 
-For accelerated validation, enable Sandbox writes only when ready and run:
-
-```bash
-make smoke-batch COUNT=8 CONFIRM_SANDBOX=yes
-```
-
-Repeating the command with the same `REFERENCE` reuses the same provider Invoices.
-
-`make test` and `make check` use `compose.test.yaml`, an isolated temporary PostgreSQL service
-and fake provider boundaries. They do not load `.env`, mount a private key or call Sandbox.
-
-Application JSONL logs persist in the `starkbank-trial-local_app_logs` volume. Container stdout
-also uses structured JSON. `make logs-webhook` follows persisted webhook records specifically.
-The source PEM remains mode `0600`; a network-isolated one-shot container prepares a readable copy
-inside an ephemeral volume mounted read-only by application containers. The initializer drops all
-Linux capabilities except `DAC_OVERRIDE`, needed when the host file owner differs from container
-root. `make down` removes the copy while preserving database and log volumes.
-
-## Quick Tunnel
-
-With the application healthy:
+To receive webhooks on your computer, use the Quick Tunnel:
 
 ```bash
 make tunnel
 make tunnel-url
 ```
 
-The second command waits up to 30 seconds and prints the generated `https://*.trycloudflare.com`
-origin. Put it in `PUBLIC_BASE_URL`, set `STARKBANK_SANDBOX_LIVE_ENABLED=true`, and follow
-[`SANDBOX.md`](SANDBOX.md).
-
-Quick Tunnel runs inside Compose. It requires neither a Cloudflare account nor a local binary.
-It is explicitly temporary and has no SLA. A `cloudflared` token is not accepted by this Compose
-file. Stop only the tunnel with `make tunnel-down`. See the
-[official Cloudflare Quick Tunnel documentation](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/).
-
-Ngrok can expose `http://127.0.0.1:8787`, but its current agent flow requires an account and
-authtoken, so it is not a project dependency. See the [ngrok agent CLI documentation](https://ngrok.com/docs/agent/cli/).
-
-## Shutdown
+Put the printed HTTPS URL in `PUBLIC_BASE_URL`, enable Sandbox mode, and follow
+[`SANDBOX.md`](SANDBOX.md):
 
 ```bash
+make sandbox-check
+make webhook-setup
+make smoke-batch COUNT=8 CONFIRM_SANDBOX=yes
+```
+
+The Quick Tunnel runs inside Compose and does not require a Cloudflare account or token. It is
+temporary and is not used on the VPS. Ngrok is an alternative, but normally requires an account
+and authtoken.
+
+## Logs and shutdown
+
+```bash
+make logs
+make logs-webhook
 make down
 ```
 
-This keeps database and log volumes. To delete only this local project's volumes:
-
-```bash
-make reset CONFIRM_RESET=yes
-```
-
-The command cannot address the VPS Compose project.
+`make down` stops the containers and keeps the local database and logs. To delete this clone's
+volumes, run `make reset CONFIRM_RESET=yes`. This cannot affect the VPS.

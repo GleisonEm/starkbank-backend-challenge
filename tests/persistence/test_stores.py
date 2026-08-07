@@ -3,14 +3,19 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, insert, select
 
 from starkbank_trial.application.schedule import build_schedule
-from starkbank_trial.domain.events import CreditedInvoiceEvent, EventRecord, EventWriteResult
+from starkbank_trial.domain.events import (
+    CreditedInvoiceEvent,
+    EventRecord,
+    EventWriteResult,
+    TransferLifecycleEvent,
+)
 from starkbank_trial.domain.jobs import JobClaim
 from starkbank_trial.domain.trials import BatchClaim, NewTrial
-from starkbank_trial.domain.types import Cents, EventId, InvoiceId
-from starkbank_trial.persistence.schema import metadata
+from starkbank_trial.domain.types import Cents, EventId, ExternalId, InvoiceId, TransferId
+from starkbank_trial.persistence.schema import metadata, transfer_jobs, webhook_events
 from starkbank_trial.persistence.stores import Stores, build_stores
 
 
@@ -101,3 +106,71 @@ def test_event_store_deduplicates_new_event_for_same_invoice(stores: Stores) -> 
 
     # Then
     assert result is EventWriteResult.DUPLICATE_INVOICE
+
+
+def test_event_store_applies_new_transfer_status_and_ignores_stale_event(stores: Stores) -> None:
+    received_at = datetime(2026, 8, 1, 12, tzinfo=UTC)
+    with stores.transfers.engine.begin() as connection:
+        connection.execute(
+            insert(webhook_events).values(
+                id="seed-event",
+                subscription="invoice",
+                log_type="credited",
+                invoice_id="invoice-1",
+                workspace_id="workspace-1",
+                payload_hash="a" * 64,
+                outcome="queued",
+                received_at=received_at,
+            )
+        )
+        connection.execute(
+            insert(transfer_jobs).values(
+                id="00000000-0000-0000-0000-000000000001",
+                event_id="seed-event",
+                invoice_id="invoice-1",
+                amount=10_000,
+                fee=50,
+                net_amount=9_950,
+                external_id="trial-transfer-invoice-1",
+                tag="trial-transfer:invoice-1",
+                status="succeeded",
+                attempts=1,
+                next_attempt_at=received_at,
+                provider_status=None,
+                created_at=received_at,
+                updated_at=received_at,
+            )
+        )
+
+    current = TransferLifecycleEvent(
+        event_id=EventId("transfer-event-current"),
+        transfer_id=TransferId("transfer-1"),
+        external_id=ExternalId("trial-transfer-invoice-1"),
+        status="success",
+        log_type="success",
+        updated_at=received_at,
+        workspace_id="workspace-1",
+    )
+    stale = TransferLifecycleEvent(
+        event_id=EventId("transfer-event-stale"),
+        transfer_id=TransferId("transfer-1"),
+        external_id=ExternalId("trial-transfer-invoice-1"),
+        status="processing",
+        log_type="processing",
+        updated_at=received_at.replace(hour=11, minute=59),
+        workspace_id="workspace-1",
+    )
+
+    updated = stores.events.record(EventRecord(current, "b" * 64, received_at, None))
+    stale_result = stores.events.record(
+        EventRecord(stale, "c" * 64, received_at.replace(minute=1), None)
+    )
+
+    with stores.transfers.engine.connect() as connection:
+        status = connection.execute(
+            select(transfer_jobs.c.provider_status, transfer_jobs.c.provider_log_type)
+        ).one()
+
+    assert updated is EventWriteResult.TRANSFER_UPDATED
+    assert stale_result is EventWriteResult.TRANSFER_STALE
+    assert status == ("success", "success")

@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum, unique
 
-from starkbank_trial.domain.types import Cents, EventId, InvoiceId
+from starkbank_trial.domain.types import Cents, EventId, ExternalId, InvoiceId, TransferId
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,7 +24,19 @@ class IgnoredEvent:
     workspace_id: str
 
 
-type VerifiedEvent = CreditedInvoiceEvent | IgnoredEvent
+@dataclass(frozen=True, slots=True)
+class TransferLifecycleEvent:
+    event_id: EventId
+    transfer_id: TransferId
+    external_id: ExternalId
+    status: str
+    log_type: str
+    updated_at: datetime
+    workspace_id: str
+    subscription: str = "transfer"
+
+
+type VerifiedEvent = CreditedInvoiceEvent | IgnoredEvent | TransferLifecycleEvent
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,3 +54,6 @@ class EventWriteResult(StrEnum):
     REJECTED = "rejected"
     DUPLICATE_EVENT = "duplicate_event"
     DUPLICATE_INVOICE = "duplicate_invoice"
+    TRANSFER_UPDATED = "transfer_updated"
+    TRANSFER_UNMATCHED = "transfer_unmatched"
+    TRANSFER_STALE = "transfer_stale"

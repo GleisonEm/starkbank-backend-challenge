@@ -146,7 +146,7 @@ def test_provider_list_webhooks_emits_safe_machine_readable_results(
     }
 
 
-def test_provider_cleanup_webhooks_keeps_only_invoice_subscription(
+def test_provider_cleanup_webhooks_keeps_invoice_and_transfer_subscription(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class CleanupGateway(FakeGateway):
@@ -189,11 +189,11 @@ def test_provider_cleanup_webhooks_keeps_only_invoice_subscription(
     )
 
     assert result.exit_code == 0
-    assert gateway.deleted == ["webhook-old", "webhook-wrong"]
+    assert gateway.deleted == ["webhook-old"]
     assert json.loads(result.stdout) == {
         "active_url": "https://trial.example.com/webhooks/starkbank",
-        "removed": 2,
-        "subscription": "invoice",
+        "removed": 1,
+        "subscriptions": ["invoice", "transfer"],
     }
 
 

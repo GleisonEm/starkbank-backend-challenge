@@ -23,6 +23,16 @@ class _JobFinish:
     provider_transfer_id: str | None
     error_code: str | None
     next_attempt_at: datetime
+    provider_status: str | None = None
+    provider_log_type: str | None = None
+    provider_status_updated_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TransferSyncCandidate:
+    id: TransferJobId
+    invoice_id: InvoiceId
+    net_amount: Cents
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +93,44 @@ class TransferStore:
             claimed_from=TransferStatus(str(row["status"])),
         )
 
+    def sync_candidates(self, limit: int = 100) -> tuple[TransferSyncCandidate, ...]:
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                select(transfer_jobs)
+                .where(
+                    transfer_jobs.c.status == TransferStatus.SUCCEEDED,
+                    transfer_jobs.c.provider_status.is_(None),
+                )
+                .order_by(transfer_jobs.c.created_at)
+                .limit(limit)
+            ).mappings()
+            return tuple(
+                TransferSyncCandidate(
+                    id=TransferJobId(str(row["id"])),
+                    invoice_id=InvoiceId(str(row["invoice_id"])),
+                    net_amount=Cents(int(row["net_amount"])),
+                )
+                for row in rows
+            )
+
+    def refresh_provider_status(
+        self,
+        job_id: TransferJobId,
+        transfer: ProviderTransfer,
+        now: datetime,
+    ) -> None:
+        with self.engine.begin() as connection:
+            connection.execute(
+                update(transfer_jobs)
+                .where(transfer_jobs.c.id == job_id)
+                .values(
+                    provider_transfer_id=transfer.id,
+                    provider_status=transfer.status,
+                    provider_status_updated_at=now,
+                    updated_at=now,
+                )
+            )
+
     def succeeded(
         self,
         job: TransferJob,
@@ -97,6 +145,8 @@ class TransferStore:
                 provider_transfer_id=transfer.id,
                 error_code=None,
                 next_attempt_at=now,
+                provider_status=transfer.status,
+                provider_status_updated_at=now,
             ),
         )
 
@@ -162,6 +212,9 @@ class TransferStore:
                     next_attempt_at=finish.next_attempt_at,
                     lease_until=None,
                     provider_transfer_id=finish.provider_transfer_id,
+                    provider_status=finish.provider_status,
+                    provider_log_type=finish.provider_log_type,
+                    provider_status_updated_at=finish.provider_status_updated_at,
                     last_error_code=finish.error_code,
                     updated_at=finish.now,
                 )

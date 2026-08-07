@@ -1,10 +1,12 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from starkbank_trial.domain.errors import MissingProviderConfigurationError
+
+MIN_REVIEW_TOKEN_LENGTH = 32
 
 
 class ProviderCredentials(BaseModel):
@@ -19,6 +21,13 @@ class WebhookConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     public_base_url: HttpUrl
+
+
+class ReviewApiConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    token: SecretStr
+    rate_limit: str
 
 
 class Settings(BaseSettings):
@@ -61,6 +70,30 @@ class Settings(BaseSettings):
         default=5, ge=1, alias="INVOICE_RECONCILIATION_MAX_ATTEMPTS"
     )
     transfer_max_attempts: int = Field(default=10, ge=1, alias="TRANSFER_MAX_ATTEMPTS")
+    review_api_enabled: bool = Field(default=False, alias="REVIEW_API_ENABLED")
+    review_api_token: SecretStr | None = Field(default=None, alias="REVIEW_API_TOKEN")
+    review_api_rate_limit: str = Field(
+        default="10 per minute;100 per hour",
+        alias="REVIEW_API_RATE_LIMIT",
+    )
+
+    @model_validator(mode="after")
+    def validate_review_api(self) -> "Settings":
+        if self.review_api_enabled:
+            token = self.review_api_token
+            if token is None or len(token.get_secret_value()) < MIN_REVIEW_TOKEN_LENGTH:
+                message = "REVIEW_API_TOKEN must contain at least 32 characters"
+                raise ValueError(message)
+        return self
+
+    def review_api_config(self) -> ReviewApiConfig | None:
+        if not self.review_api_enabled:
+            return None
+        token = self.review_api_token
+        if token is None:
+            message = "REVIEW_API_TOKEN is required when review API is enabled"
+            raise ValueError(message)
+        return ReviewApiConfig(token=token, rate_limit=self.review_api_rate_limit)
 
     def provider_credentials(self) -> ProviderCredentials:
         project_id = self.starkbank_project_id

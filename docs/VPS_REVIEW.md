@@ -19,6 +19,10 @@ sudo make vps-live-status
 sudo docker compose --env-file /etc/starkbank-trial/vps.env \
   -f compose.vps.yaml -p starkbank-trial-vps logs --tail=200 api worker scheduler
 sudo journalctl -u starkbank-trial.service --since today
+
+# Read-only HTTP review API: configure the private token in your client first.
+curl -H 'Authorization: Bearer <review-token>' \
+  https://159.223.160.99/api/v1/review/overview
 ```
 
 With the owner's approval, the deployment path can also be exercised:

@@ -113,6 +113,7 @@ jobs:
       - name: Install runtime secrets
         env:
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          REVIEW_API_TOKEN: ${{ secrets.REVIEW_API_TOKEN }}
           STARKBANK_PRIVATE_KEY_PEM: ${{ secrets.STARKBANK_PRIVATE_KEY_PEM }}
           STARKBANK_PROJECT_ID: ${{ secrets.STARKBANK_PROJECT_ID }}
           VPS_HOST: ${{ vars.VPS_HOST }}
@@ -124,8 +125,9 @@ jobs:
           printf '%s' "$STARKBANK_PROJECT_ID" > "$secret_dir/project-id"
           printf '%s\n' "$STARKBANK_PRIVATE_KEY_PEM" > "$secret_dir/private-key.pem"
           printf '%s' "$POSTGRES_PASSWORD" > "$secret_dir/postgres-password"
+          printf '%s' "$REVIEW_API_TOKEN" > "$secret_dir/review-api-token"
           tar --create --file=- --directory="$secret_dir" \
-            project-id private-key.pem postgres-password | \
+            project-id private-key.pem postgres-password review-api-token | \
             ssh -o BatchMode=yes \
               -o UserKnownHostsFile="$RUNNER_TEMP/starkbank-ssh/known_hosts" \
               -i "$RUNNER_TEMP/starkbank-ssh/id_ed25519" \

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, NoReturn, cast
 
 if TYPE_CHECKING:
@@ -15,7 +16,12 @@ from starkbank.error import (
 )
 
 from starkbank_trial.domain.errors import LiveOperationsDisabledError
-from starkbank_trial.domain.events import CreditedInvoiceEvent, IgnoredEvent, VerifiedEvent
+from starkbank_trial.domain.events import (
+    CreditedInvoiceEvent,
+    IgnoredEvent,
+    TransferLifecycleEvent,
+    VerifiedEvent,
+)
 from starkbank_trial.domain.invoices import InvoiceDraft, ProviderInvoice
 from starkbank_trial.domain.models import TransferCommand
 from starkbank_trial.domain.provider import (
@@ -44,6 +50,15 @@ class _SdkTransfer(BaseModel):
     status: str
 
 
+class _SdkTransferLifecycle(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    external_id: str
+    status: str
+    updated: datetime
+
+
 class _SdkEvent(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -61,6 +76,10 @@ class _SdkLog(BaseModel):
 
 class _SdkCreditedLog(_SdkLog):
     invoice: object
+
+
+class _SdkTransferLog(_SdkLog):
+    transfer: object
 
 
 class _SdkCreditedInvoice(BaseModel):
@@ -169,6 +188,26 @@ class StarkBankClient:
             event = _SdkEvent.model_validate(raw_event)
             self._assert_expected_workspace(event.workspace_id)
             log = _SdkLog.model_validate(event.log)
+            if event.subscription == "transfer":
+                try:
+                    transfer_log = _SdkTransferLog.model_validate(event.log)
+                except ValidationError:
+                    return IgnoredEvent(
+                        event_id=EventId(event.id),
+                        subscription=event.subscription,
+                        log_type=log.type,
+                        workspace_id=event.workspace_id,
+                    )
+                transfer = _SdkTransferLifecycle.model_validate(transfer_log.transfer)
+                return TransferLifecycleEvent(
+                    event_id=EventId(event.id),
+                    transfer_id=TransferId(transfer.id),
+                    external_id=ExternalId(transfer.external_id),
+                    status=transfer.status,
+                    log_type=log.type,
+                    updated_at=transfer.updated,
+                    workspace_id=event.workspace_id,
+                )
             if event.subscription != "invoice" or log.type != "credited":
                 return IgnoredEvent(
                     event_id=EventId(event.id),
@@ -195,10 +234,10 @@ class StarkBankClient:
     def ensure_webhook(self, url: str) -> ProviderWebhook:
         self._require_live("ensure_webhook")
         for existing in self.list_webhooks():
-            if existing.url == url and set(existing.subscriptions) == {"invoice"}:
+            if existing.url == url and set(existing.subscriptions) == {"invoice", "transfer"}:
                 return existing
         try:
-            created = starkbank.webhook.create(url, ["invoice"], user=self.user)
+            created = starkbank.webhook.create(url, ["invoice", "transfer"], user=self.user)
             webhook = _SdkWebhook.model_validate(created)
         except (StarkError, ValidationError) as error:
             self._raise_provider(error, "ensure_webhook", unknown_outcome=True)

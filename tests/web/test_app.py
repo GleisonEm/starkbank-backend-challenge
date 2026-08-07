@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import pytest
 from flask.testing import FlaskClient
 from sqlalchemy import Engine, create_engine, func, select
+from sqlalchemy.exc import SQLAlchemyError
 
 from starkbank_trial.application.transfers import TransferWorker
 from starkbank_trial.application.trials import BatchCounts, TrialService
@@ -20,6 +21,7 @@ from starkbank_trial.domain.models import TransferCommand
 from starkbank_trial.domain.provider import (
     InvalidWebhookError,
     ProviderTransfer,
+    ProviderTransientError,
     UnexpectedWorkspaceError,
 )
 from starkbank_trial.domain.types import Cents, EventId, InvoiceId
@@ -44,6 +46,7 @@ class FakeGateway:
     event: VerifiedEvent
     invalid: bool = False
     foreign_workspace: bool = False
+    transient: bool = False
     transfers: list[TransferCommand] = field(default_factory=list)
 
     def create_invoice(self, draft: InvoiceDraft) -> ProviderInvoice:
@@ -60,6 +63,8 @@ class FakeGateway:
         return None
 
     def verify_event(self, content: bytes, signature: str) -> VerifiedEvent:
+        if self.transient:
+            raise ProviderTransientError(operation="verify_event")
         if self.invalid:
             raise InvalidWebhookError(operation="verify_event")
         if self.foreign_workspace:
@@ -133,6 +138,21 @@ def test_health_endpoints_report_live_and_ready(app_fixture: AppFixture) -> None
     assert ready.get_json() == {"status": "ready"}
 
 
+def test_readiness_reports_database_outage(
+    app_fixture: AppFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def broken_connect(_engine: Engine) -> None:
+        raise SQLAlchemyError
+
+    monkeypatch.setattr(Engine, "connect", broken_connect)
+
+    response = app_fixture.client.get("/health/ready")
+
+    assert response.status_code == 503
+    assert response.get_json() == {"status": "unavailable"}
+
+
 def test_webhook_requires_signature_and_queues_without_transfer_call(
     app_fixture: AppFixture,
 ) -> None:
@@ -165,6 +185,19 @@ def test_webhook_rejects_invalid_signature(app_fixture: AppFixture) -> None:
     # Then
     assert response.status_code == 400
     assert response.get_json() == {"error": "invalid webhook"}
+
+
+def test_webhook_reports_provider_verification_outage(app_fixture: AppFixture) -> None:
+    app_fixture.gateway.transient = True
+
+    response = app_fixture.client.post(
+        "/webhooks/starkbank",
+        data=b"payload",
+        headers={"Digital-Signature": "valid"},
+    )
+
+    assert response.status_code == 503
+    assert response.get_json() == {"error": "verification unavailable"}
 
 
 def test_webhook_ignores_foreign_workspace_without_persisting(

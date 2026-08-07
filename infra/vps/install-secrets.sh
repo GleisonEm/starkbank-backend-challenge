@@ -23,9 +23,9 @@ trap cleanup EXIT HUP INT TERM
 
 tar --extract --file=- --directory="$receive_dir" \
     --no-same-owner --no-same-permissions -- \
-    project-id private-key.pem postgres-password
+    project-id private-key.pem postgres-password review-api-token
 
-for incoming_file in project-id private-key.pem postgres-password; do
+for incoming_file in project-id private-key.pem postgres-password review-api-token; do
     [ -f "$receive_dir/$incoming_file" ] || fail "secret archive is missing $incoming_file"
     [ ! -L "$receive_dir/$incoming_file" ] || fail "$incoming_file must be a regular file"
 done
@@ -46,6 +46,9 @@ case "$postgres_password" in
 esac
 [ "${#postgres_password}" -ge 24 ] || fail "PostgreSQL password must contain at least 24 characters"
 [ "${#postgres_password}" -le 128 ] || fail "PostgreSQL password must contain at most 128 characters"
+
+review_api_token=$(command cat "$receive_dir/review-api-token")
+[ "${#review_api_token}" -ge 32 ] || fail "review API token must contain at least 32 characters"
 if [ -f "$SECRETS_DIR/postgres-password" ]; then
     installed_postgres_password=$(command cat "$SECRETS_DIR/postgres-password")
     [ "$postgres_password" = "$installed_postgres_password" ] || \
@@ -57,6 +60,7 @@ printf '%s' "$postgres_password" > "$release_dir/postgres-password"
     printf 'DATABASE_URL=postgresql+psycopg://%s:%s@postgres:5432/%s\n' \
         "$POSTGRES_USER" "$postgres_password" "$POSTGRES_DB"
     printf 'STARKBANK_PROJECT_ID=%s\n' "$project_id"
+    printf 'REVIEW_API_TOKEN=%s\n' "$review_api_token"
 } > "$release_dir/runtime.env"
 
 install -m 0400 -o 10001 -g 10001 "$private_key_file" \

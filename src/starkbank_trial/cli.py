@@ -3,7 +3,7 @@ import time
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, NoReturn
+from typing import Annotated, NoReturn, cast
 from uuid import NAMESPACE_URL, uuid5
 
 import typer
@@ -17,7 +17,9 @@ from starkbank_trial.bootstrap import Services, build_client, build_services
 from starkbank_trial.config import Settings
 from starkbank_trial.domain.errors import LiveOperationsDisabledError
 from starkbank_trial.domain.provider import ProviderError
+from starkbank_trial.domain.transfer import build_transfer_command
 from starkbank_trial.logging import configure_logging
+from starkbank_trial.persistence.review_store import ReviewStore
 
 app = typer.Typer(no_args_is_help=True)
 db_app = typer.Typer(no_args_is_help=True)
@@ -93,29 +95,17 @@ def trial_reconcile() -> None:
 
 @trial_app.command("status")
 def trial_status() -> None:
-    report = _services().stores.trials.report()
-    trial = report.trial
-    trial_payload = (
-        None
-        if trial is None
-        else {
-            "id": trial.id,
-            "status": trial.status.value,
-            "started_at": trial.started_at.isoformat(),
-            "ends_at": trial.ends_at.isoformat(),
-            "next_batch_at": (
-                trial.next_batch_at.isoformat() if trial.next_batch_at is not None else None
-            ),
-        }
-    )
+    overview = ReviewStore(_services().engine).overview()
+    trial_payload = overview["trial"]
+    counts = cast("dict[str, object]", overview["counts"])
     typer.echo(
         json.dumps(
             {
                 "trial": trial_payload,
-                "batches": {item.status: item.count for item in report.batches},
-                "invoices": {item.status: item.count for item in report.invoices},
-                "webhook_events": {item.status: item.count for item in report.webhook_events},
-                "transfers": {item.status: item.count for item in report.transfers},
+                "batches": counts["batches"],
+                "invoices": counts["invoices"],
+                "webhook_events": counts["webhook_events"],
+                "transfers": counts["transfers"],
             },
             sort_keys=True,
         )
@@ -157,6 +147,36 @@ def provider_list_webhooks() -> None:
     )
 
 
+@provider_app.command("sync-transfer-statuses")
+def provider_sync_transfer_statuses(
+    limit: int = typer.Option(default=100, min=1, max=500),
+) -> None:
+    services = _services()
+    provider = services.provider
+    if provider is None:
+        message = "provider is unavailable"
+        raise typer.BadParameter(message)
+    refreshed = 0
+    unresolved = 0
+    for candidate in services.stores.transfers.sync_candidates(limit):
+        command = build_transfer_command(candidate.invoice_id, candidate.net_amount)
+        try:
+            transfer = provider.find_transfer(command)
+        except ProviderError:
+            unresolved += 1
+            continue
+        if transfer is None:
+            unresolved += 1
+            continue
+        services.stores.transfers.refresh_provider_status(
+            candidate.id,
+            transfer,
+            datetime.now(UTC),
+        )
+        refreshed += 1
+    _write_result({"refreshed": refreshed, "unresolved": unresolved})
+
+
 @provider_app.command("cleanup-webhooks")
 def provider_cleanup_webhooks(
     *,
@@ -171,7 +191,9 @@ def provider_cleanup_webhooks(
     try:
         webhooks = client.list_webhooks()
         matching = [webhook for webhook in webhooks if webhook.url == target_url]
-        valid = [webhook for webhook in matching if set(webhook.subscriptions) == {"invoice"}]
+        valid = [
+            webhook for webhook in matching if set(webhook.subscriptions) == {"invoice", "transfer"}
+        ]
         keep = valid[0] if valid else None
         removed = 0
         for webhook in webhooks:
@@ -185,7 +207,11 @@ def provider_cleanup_webhooks(
         _exit_provider_error(error)
     typer.echo(
         json.dumps(
-            {"active_url": keep.url, "removed": removed, "subscription": "invoice"},
+            {
+                "active_url": keep.url,
+                "removed": removed,
+                "subscriptions": ["invoice", "transfer"],
+            },
             sort_keys=True,
         )
     )

@@ -8,6 +8,7 @@
 # Production snapshots copied from the VPS; never commit or use as local Compose defaults.
 .env.production
 .env.production.secrets
+reviewer.env
 __pycache__/
 .pytest_cache/
 .mypy_cache/

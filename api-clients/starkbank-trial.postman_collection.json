@@ -1,0 +1,77 @@
+{
+  "info": {
+    "name": "Stark Bank Trial Review API",
+    "description": "Read-only operational views for local or VPS review. Set base_url and review_token before sending protected requests.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      { "key": "token", "value": "{{review_token}}", "type": "string" }
+    ]
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://127.0.0.1:8787" },
+    { "key": "review_token", "value": "" },
+    { "key": "trial_id", "value": "" },
+    { "key": "batch_id", "value": "" },
+    { "key": "draft_id", "value": "" },
+    { "key": "job_id", "value": "" },
+    { "key": "event_id", "value": "" }
+  ],
+  "event": [
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.test('response is JSON', function () { pm.response.to.be.json(); });",
+          "pm.test('response has an HTTP status', function () { pm.expect(pm.response.code).to.be.a('number'); });"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Readiness",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": { "type": "noauth" },
+            "url": "{{base_url}}/health/ready"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Overview",
+      "item": [
+        { "name": "Overview", "request": { "method": "GET", "header": [], "url": "{{base_url}}/api/v1/review/overview" } },
+        { "name": "Configuration", "request": { "method": "GET", "header": [], "url": "{{base_url}}/api/v1/review/configuration" } },
+        { "name": "Schedule", "request": { "method": "GET", "header": [], "url": "{{base_url}}/api/v1/review/schedule" } },
+        { "name": "Configured provider webhooks", "request": { "method": "GET", "header": [], "url": "{{base_url}}/api/v1/review/provider/webhooks" } }
+      ]
+    },
+    {
+      "name": "Resources",
+      "item": [
+        { "name": "Trials", "request": { "method": "GET", "header": [], "url": "{{base_url}}/api/v1/review/trials?limit=25" } },
+        { "name": "Trial detail", "request": { "method": "GET", "header": [], "url": "{{base_url}}/api/v1/review/trials/{{trial_id}}" } },
+        { "name": "Batches", "request": { "method": "GET", "header": [], "url": "{{base_url}}/api/v1/review/batches?trial_id={{trial_id}}&limit=100" } },
+        { "name": "Batch detail", "request": { "method": "GET", "header": [], "url": "{{base_url}}/api/v1/review/batches/{{batch_id}}" } },
+        { "name": "Invoices", "request": { "method": "GET", "header": [], "url": "{{base_url}}/api/v1/review/invoices?limit=25" } },
+        { "name": "Failed invoices", "request": { "method": "GET", "header": [], "url": "{{base_url}}/api/v1/review/invoices?status=failed&limit=25" } },
+        { "name": "Invoice detail", "request": { "method": "GET", "header": [], "url": "{{base_url}}/api/v1/review/invoices/{{draft_id}}" } },
+        { "name": "Transfers", "request": { "method": "GET", "header": [], "url": "{{base_url}}/api/v1/review/transfers?limit=25" } },
+        { "name": "Successful provider transfers", "request": { "method": "GET", "header": [], "url": "{{base_url}}/api/v1/review/transfers?provider_status=success&limit=25" } },
+        { "name": "Canceled provider transfers", "request": { "method": "GET", "header": [], "url": "{{base_url}}/api/v1/review/transfers?provider_status=canceled&limit=25" } },
+        { "name": "Transfer detail", "request": { "method": "GET", "header": [], "url": "{{base_url}}/api/v1/review/transfers/{{job_id}}" } },
+        { "name": "Webhook events", "request": { "method": "GET", "header": [], "url": "{{base_url}}/api/v1/review/webhook-events?limit=25" } },
+        { "name": "Webhook event detail", "request": { "method": "GET", "header": [], "url": "{{base_url}}/api/v1/review/webhook-events/{{event_id}}" } }
+      ]
+    }
+  ]
+}

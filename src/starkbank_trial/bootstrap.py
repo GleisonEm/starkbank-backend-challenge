@@ -19,6 +19,7 @@ class Services:
     trial: TrialService
     webhook: WebhookService
     worker: TransferWorker
+    provider: StarkBankClient | None = None
 
 
 def build_services(settings: Settings) -> Services:
@@ -50,6 +51,7 @@ def build_services(settings: Settings) -> Services:
             transfer_max_attempts=settings.transfer_max_attempts,
             live_operations_enabled=settings.starkbank_sandbox_live_enabled,
         ),
+        provider=client,
     )
 
 

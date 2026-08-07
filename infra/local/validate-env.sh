@@ -60,4 +60,12 @@ if [ "$MODE" = "sandbox" ]; then
     esac
 fi
 
+if [ "$(env_value REVIEW_API_ENABLED)" = "true" ]; then
+    review_api_token=$(env_value REVIEW_API_TOKEN)
+    [ "${#review_api_token}" -ge 32 ] || fail "REVIEW_API_TOKEN must contain at least 32 characters"
+    case "$review_api_token" in
+        replace-with-*) fail "replace the example REVIEW_API_TOKEN" ;;
+    esac
+fi
+
 printf 'Local configuration is valid for %s operations.\n' "$MODE"

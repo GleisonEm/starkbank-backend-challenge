@@ -1,8 +1,8 @@
 # Stark Bank Backend Developer Trial
 
-A production-minded Flask integration for the Stark Bank Sandbox. It issues 8 to 12 Invoices
-every three hours for 24 hours and, for each signed `invoice/credited` event, transfers the net
-credited amount to the account required by the challenge.
+A small Flask integration for the Stark Bank Sandbox. It creates 8 to 12 Invoices every three
+hours for 24 hours and, when an Invoice is credited, sends the net amount to the account required
+by the challenge.
 
 The application uses Python 3.13, Flask 3.1, `starkbank==2.35.0`, PostgreSQL, Gunicorn,
 Supercronic and Docker Compose. It deliberately does not need Kubernetes, Swarm, Redis or
@@ -10,7 +10,8 @@ Valkey for this workload.
 
 ## Evaluate it
 
-There are two independent environments. Neither reads configuration from the other.
+There are two separate ways to run it. The deployed VPS and a local clone have their own
+configuration and do not share a database or secret file.
 
 | Path | Purpose | Configuration |
 | --- | --- | --- |
@@ -35,17 +36,16 @@ public short-lived certificate for that IPv4 address and renews it automatically
 The Sandbox Workspace is configured through the non-secret `STARKBANK_WORKSPACE_ID` and is
 checked after signature verification, before any event is persisted.
 
-To run an independent local copy:
+To run an independent local copy, first create a local configuration and key pair:
 
 ```bash
 git clone https://github.com/GleisonEm/starkbank-backend-challenge.git
 cd starkbank-backend-challenge
-cp .env.example .env
-mkdir -p secrets
-cp /path/to/private-key.pem secrets/private-key.pem
-
-# Edit .env, including a non-default database password and Sandbox Project ID.
+make env-init
 make build
+make starkbank-keygen
+
+# Edit .env, including a non-default database password and numeric IDs.
 make up
 make health
 make test
@@ -127,6 +127,7 @@ account/token-based alternative.
 - [`docs/SANDBOX.md`](docs/SANDBOX.md): Webhook, smoke Invoice and 24-hour execution
 - [`docs/VPS.md`](docs/VPS.md): manual VPS installation and independent production configuration
 - [`docs/VPS_REVIEW.md`](docs/VPS_REVIEW.md): evaluator SSH inspection guide
+- [`docs/REVIEW_API.md`](docs/REVIEW_API.md): Postman/Insomnia read-only review API
 - [`docs/OPERATIONS.md`](docs/OPERATIONS.md): deploy, logs, backup, restore and rollback
 - [`docs/EVIDENCE.md`](docs/EVIDENCE.md): redacted release, smoke and trial evidence
 - [`SECURITY.md`](SECURITY.md): secrets, hardening, sudo exposure and revocation

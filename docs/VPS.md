@@ -155,9 +155,8 @@ and the [Caddy TLS directive](https://caddyserver.com/docs/caddyfile/directives/
 
 The official review VPS already has its boot and backup systemd units installed. Routine operation
 uses the Compose-backed `make vps-up`, `make vps-down`, `make vps-backup` and `make vps-restore`
-commands documented in [`OPERATIONS.md`](OPERATIONS.md). The one-time host bootstrap units are
-kept only in the maintainer's ignored `.local/vps-bootstrap/` archive and are not part of the
-public application release.
+commands documented in [`OPERATIONS.md`](OPERATIONS.md). Those one-time host bootstrap units are
+VPS state and are not part of the public application repository.
 
 ## 6. Temporary evaluator account
 
