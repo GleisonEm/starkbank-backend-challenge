@@ -4,8 +4,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
 
+from starkbank_trial.application.payers import build_smoke_invoice
 from starkbank_trial.application.smoke import SmokeBatchService
 from starkbank_trial.application.transfers import TransferWorker, WorkerResult
 from starkbank_trial.application.trials import TrialService, TrialTickResult
@@ -14,7 +15,7 @@ from starkbank_trial.domain.invoices import InvoiceDraft, ProviderInvoice
 from starkbank_trial.domain.models import TransferCommand
 from starkbank_trial.domain.provider import ProviderTransfer, ProviderUnknownOutcomeError
 from starkbank_trial.domain.types import InvoiceId, TransferId
-from starkbank_trial.persistence.schema import metadata, transfer_jobs
+from starkbank_trial.persistence.schema import metadata, owned_invoices, transfer_jobs
 from starkbank_trial.persistence.stores import Stores, build_stores
 
 
@@ -127,10 +128,10 @@ def test_disabled_worker_does_not_claim_a_transfer(stores: Stores) -> None:
         assert connection.execute(select(transfer_jobs.c.status)).scalar_one() == "pending"
 
 
-def test_smoke_batch_is_idempotent_by_reference() -> None:
+def test_smoke_batch_is_idempotent_by_reference(stores: Stores) -> None:
     provider = InvoiceProvider()
     clock = FixedClock(datetime(2026, 8, 1, 12, tzinfo=UTC))
-    service = SmokeBatchService(provider, clock)
+    service = SmokeBatchService(provider, clock, stores.invoices, "local")
 
     first = service.run("submission-check", 8, 10_000)
     second = service.run("submission-check", 8, 10_000)
@@ -140,14 +141,32 @@ def test_smoke_batch_is_idempotent_by_reference() -> None:
     assert len(second.invoices) == 8
     assert second.reused == 8
     assert len(provider.created) == 8
+    with stores.invoices.engine.connect() as connection:
+        assert (
+            connection.execute(select(func.count()).select_from(owned_invoices)).scalar_one() == 8
+        )
 
 
-def test_smoke_batch_reconciles_an_ambiguous_create() -> None:
+def test_smoke_batch_reconciles_an_ambiguous_create(stores: Stores) -> None:
     provider = InvoiceProvider(unknown_once=True)
-    service = SmokeBatchService(provider, FixedClock(datetime(2026, 8, 1, 12, tzinfo=UTC)))
+    service = SmokeBatchService(
+        provider,
+        FixedClock(datetime(2026, 8, 1, 12, tzinfo=UTC)),
+        stores.invoices,
+        "local",
+    )
 
     result = service.run("ambiguous-create", 1, 10_000)
 
     assert len(result.invoices) == 1
     assert result.reused == 0
     assert len(provider.created) == 1
+
+
+def test_smoke_reference_is_namespaced_by_environment() -> None:
+    now = datetime(2026, 8, 1, 12, tzinfo=UTC)
+
+    local = build_smoke_invoice("same-reference", 10_000, now, namespace="local")
+    vps = build_smoke_invoice("same-reference", 10_000, now, namespace="vps")
+
+    assert local.tag != vps.tag

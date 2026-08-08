@@ -6,8 +6,9 @@ from sqlalchemy import Engine, func, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection, RowMapping
+from sqlalchemy.exc import IntegrityError
 
-from starkbank_trial.domain.constants import SMOKE_BATCH_ID, SMOKE_RUN_ID
+from starkbank_trial.domain.errors import InvoiceOwnershipConflictError
 from starkbank_trial.domain.invoices import (
     DraftCreated,
     DraftFailure,
@@ -16,7 +17,12 @@ from starkbank_trial.domain.invoices import (
 )
 from starkbank_trial.domain.status import BatchStatus, DraftStatus, TrialStatus
 from starkbank_trial.domain.types import BatchId, Cents, DraftId
-from starkbank_trial.persistence.schema import invoice_batches, invoice_drafts, trial_runs
+from starkbank_trial.persistence.schema import (
+    invoice_batches,
+    invoice_drafts,
+    owned_invoices,
+    trial_runs,
+)
 
 MAX_RECONCILIATION_ATTEMPTS = 5
 
@@ -90,52 +96,62 @@ class InvoiceStore:
             ]
             if rows:
                 connection.execute(insert(invoice_drafts), rows)
+                connection.execute(
+                    insert(owned_invoices),
+                    [
+                        {
+                            "tag": row["tag"],
+                            "provider_invoice_id": None,
+                            "source": "trial",
+                            "draft_id": row["id"],
+                            "created_at": row["created_at"],
+                            "updated_at": row["updated_at"],
+                        }
+                        for row in rows
+                    ],
+                )
 
-    def record_smoke(self, draft: InvoiceDraft, provider_invoice_id: str, at: datetime) -> None:
+    def register_smoke(self, draft: InvoiceDraft, at: datetime) -> None:
         with self.engine.begin() as connection:
-            upsert = _conflict_aware_insert(self.engine.dialect.name, trial_runs)
+            upsert = _conflict_aware_insert(self.engine.dialect.name, owned_invoices)
             connection.execute(
                 upsert.values(
-                    id=SMOKE_RUN_ID,
-                    status=TrialStatus.COMPLETED,
-                    started_at=at,
-                    ends_at=at,
-                    created_at=at,
-                    active_marker=None,
-                ).on_conflict_do_nothing(index_elements=[trial_runs.c.id])
-            )
-            upsert = _conflict_aware_insert(self.engine.dialect.name, invoice_batches)
-            connection.execute(
-                upsert.values(
-                    id=SMOKE_BATCH_ID,
-                    run_id=SMOKE_RUN_ID,
-                    slot_index=0,
-                    scheduled_at=at,
-                    target_count=12,
-                    status=BatchStatus.COMPLETED,
-                    attempts=0,
-                    created_at=at,
-                ).on_conflict_do_nothing(index_elements=[invoice_batches.c.id])
-            )
-            upsert = _conflict_aware_insert(self.engine.dialect.name, invoice_drafts)
-            connection.execute(
-                upsert.values(
-                    id=str(draft.id),
-                    batch_id=SMOKE_BATCH_ID,
-                    ordinal=draft.ordinal,
-                    payer_name=draft.payer_name,
-                    payer_tax_id=draft.payer_tax_id,
-                    amount=int(draft.amount),
                     tag=draft.tag,
-                    status=DraftStatus.CREATED,
-                    provider_invoice_id=provider_invoice_id,
-                    attempts=0,
-                    reconcile_attempts=0,
+                    provider_invoice_id=None,
+                    source="smoke",
+                    draft_id=None,
                     created_at=at,
                     updated_at=at,
-                    next_attempt_at=at,
-                ).on_conflict_do_nothing(index_elements=[invoice_drafts.c.id])
+                ).on_conflict_do_nothing(index_elements=[owned_invoices.c.tag])
             )
+
+    def bind_provider_invoice(self, tag: str, provider_invoice_id: str, at: datetime) -> None:
+        with self.engine.begin() as connection:
+            owner = connection.execute(
+                select(owned_invoices.c.provider_invoice_id).where(owned_invoices.c.tag == tag)
+            ).first()
+            if owner is None:
+                raise InvoiceOwnershipConflictError(tag, provider_invoice_id)
+            current = owner[0]
+            if current != provider_invoice_id:
+                if current is None:
+                    try:
+                        connection.execute(
+                            update(owned_invoices)
+                            .where(owned_invoices.c.tag == tag)
+                            .values(provider_invoice_id=provider_invoice_id, updated_at=at)
+                        )
+                    except IntegrityError as error:
+                        raise InvoiceOwnershipConflictError(tag, provider_invoice_id) from error
+                    return
+                raise InvoiceOwnershipConflictError(tag, provider_invoice_id)
+            connection.execute(
+                update(owned_invoices).where(owned_invoices.c.tag == tag).values(updated_at=at)
+            )
+
+    def record_smoke(self, draft: InvoiceDraft, provider_invoice_id: str, at: datetime) -> None:
+        self.register_smoke(draft, at)
+        self.bind_provider_invoice(draft.tag, provider_invoice_id, at)
 
     def pending(self, batch_id: BatchId, now: datetime | None = None) -> tuple[InvoiceDraft, ...]:
         effective_now = now or datetime.now(UTC)
@@ -317,6 +333,14 @@ class InvoiceStore:
                     last_error_code=transition.error_code,
                     next_attempt_at=transition.next_attempt_at,
                     **({"reconcile_attempts": 0} if transition.reset_reconcile_attempts else {}),
+                    updated_at=transition.at,
+                )
+            )
+            connection.execute(
+                update(owned_invoices)
+                .where(owned_invoices.c.draft_id == str(transition.draft_id))
+                .values(
+                    provider_invoice_id=transition.provider_invoice_id,
                     updated_at=transition.at,
                 )
             )

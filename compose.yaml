@@ -10,6 +10,7 @@ x-app: &app
     - path: .env
       required: true
   environment:
+    COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:?set COMPOSE_PROJECT_NAME}
     DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB}
     STARKBANK_ENVIRONMENT: sandbox
     STARKBANK_PRIVATE_KEY_FILE: /run/secrets/starkbank_private_key

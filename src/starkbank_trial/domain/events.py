@@ -12,6 +12,7 @@ class CreditedInvoiceEvent:
     amount: Cents
     fee: Cents
     workspace_id: str
+    tags: tuple[str, ...] = ()
     subscription: str = "invoice"
     log_type: str = "credited"
 

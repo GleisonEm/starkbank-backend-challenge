@@ -107,9 +107,10 @@ Keep in mind:
   PostgreSQL.
 - `PUBLIC_BASE_URL` and the registered webhook are per environment — the Quick Tunnel URL
   changes every session, so re-run `make tunnel-url` and `make webhook-setup` when it changes.
-- If a local test created invoices you want fully removed from the workspace's event history,
-  use `provider cleanup-events` from [`SANDBOX.md`](SANDBOX.md) — this is optional maintenance,
-  not a requirement, since unknown-credit filtering already prevents double transfers.
+- If a local test created invoices and you want best-effort cleanup of the workspace's event
+  history, use `provider cleanup-events` from [`SANDBOX.md`](SANDBOX.md). It is optional
+  maintenance, not isolation or retry cancellation; unknown-credit filtering and local
+  ownership records are the concurrency controls.
 - A separate Project/Workspace per environment is still the cleanest setup when you have
   permission to create one; sharing is only needed when it is not available (for example, the
   Sandbox account may not allow creating extra workspaces).

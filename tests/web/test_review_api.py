@@ -15,6 +15,7 @@ from starkbank_trial.application.trials import TrialService
 from starkbank_trial.application.webhooks import WebhookService
 from starkbank_trial.bootstrap import Services
 from starkbank_trial.config import Settings
+from starkbank_trial.domain.constants import SMOKE_BATCH_ID, SMOKE_RUN_ID
 from starkbank_trial.domain.events import IgnoredEvent, VerifiedEvent
 from starkbank_trial.domain.invoices import InvoiceDraft, ProviderInvoice
 from starkbank_trial.domain.models import TransferCommand
@@ -143,6 +144,123 @@ def test_review_api_returns_overview_without_pii(review_fixture: ReviewFixture) 
     assert payload["data"]["schedule"]["interval_hours"] == 3
     assert "payer_name" not in json.dumps(payload)
     assert "payer_tax_id" not in json.dumps(payload)
+
+
+def test_review_hides_legacy_smoke_from_trial_views_but_keeps_global_audit(
+    review_fixture: ReviewFixture,
+) -> None:
+    now = datetime(2026, 8, 1, 12, tzinfo=UTC)
+    with review_fixture.engine.begin() as connection:
+        connection.execute(
+            insert(trial_runs).values(
+                id=SMOKE_RUN_ID,
+                status="completed",
+                started_at=now,
+                ends_at=now,
+                created_at=now,
+            )
+        )
+        connection.execute(
+            insert(invoice_batches).values(
+                id=SMOKE_BATCH_ID,
+                run_id=SMOKE_RUN_ID,
+                slot_index=0,
+                scheduled_at=now,
+                target_count=12,
+                status="completed",
+                attempts=0,
+                created_at=now,
+            )
+        )
+        connection.execute(
+            insert(invoice_drafts).values(
+                id="smoke-draft",
+                batch_id=SMOKE_BATCH_ID,
+                ordinal=0,
+                payer_name="Smoke Payer",
+                payer_tax_id="12345678901",
+                amount=10_000,
+                tag="legacy-smoke-tag",
+                status="created",
+                provider_invoice_id="smoke-invoice",
+                attempts=0,
+                reconcile_attempts=0,
+                created_at=now,
+                updated_at=now,
+                next_attempt_at=now,
+            )
+        )
+        connection.execute(
+            insert(webhook_events).values(
+                id="smoke-event",
+                subscription="invoice",
+                log_type="credited",
+                invoice_id="smoke-invoice",
+                workspace_id="workspace-1",
+                payload_hash="s" * 64,
+                outcome="queued",
+                received_at=now,
+            )
+        )
+        connection.execute(
+            insert(transfer_jobs).values(
+                id="smoke-job",
+                event_id="smoke-event",
+                invoice_id="smoke-invoice",
+                amount=10_000,
+                fee=50,
+                net_amount=9_950,
+                external_id="smoke-transfer",
+                tag="smoke-transfer-tag",
+                status="succeeded",
+                attempts=1,
+                next_attempt_at=now,
+                provider_transfer_id="smoke-provider-transfer",
+                provider_status="success",
+                provider_log_type="success",
+                provider_status_updated_at=now,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    headers = {"Authorization": "Bearer review-token-that-is-long-enough-for-tests"}
+
+    overview = review_fixture.client.get("/api/v1/review/overview", headers=headers)
+    trials = review_fixture.client.get("/api/v1/review/trials", headers=headers)
+    batches = review_fixture.client.get("/api/v1/review/batches", headers=headers)
+    invoices = review_fixture.client.get("/api/v1/review/invoices", headers=headers)
+    events = review_fixture.client.get("/api/v1/review/webhook-events", headers=headers)
+    transfers = review_fixture.client.get("/api/v1/review/transfers", headers=headers)
+    trial_detail = review_fixture.client.get(
+        f"/api/v1/review/trials/{SMOKE_RUN_ID}", headers=headers
+    )
+    batch_detail = review_fixture.client.get(
+        f"/api/v1/review/batches/{SMOKE_BATCH_ID}", headers=headers
+    )
+    invoice_detail = review_fixture.client.get(
+        "/api/v1/review/invoices/smoke-draft", headers=headers
+    )
+
+    assert overview.get_json()["data"]["trial"] is None
+    assert overview.get_json()["data"]["counts"] == {
+        "batches": {},
+        "invoices": {},
+        "webhook_events": {},
+        "transfers": {},
+    }
+    assert overview.get_json()["data"]["transfer_totals_cents"] == {
+        "amount": 0,
+        "fee": 0,
+        "net_amount": 0,
+    }
+    assert trials.get_json()["data"] == []
+    assert batches.get_json()["data"] == []
+    assert invoices.get_json()["data"] == []
+    assert events.get_json()["data"][0]["id"] == "smoke-event"
+    assert transfers.get_json()["data"][0]["id"] == "smoke-job"
+    assert trial_detail.status_code == 404
+    assert batch_detail.status_code == 404
+    assert invoice_detail.status_code == 404
 
 
 def test_review_api_rejects_invalid_limit(review_fixture: ReviewFixture) -> None:

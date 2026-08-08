@@ -83,6 +83,26 @@ invoice_drafts.append_constraint(
     Index("ix_invoice_drafts_status_next_attempt_at", "status", "next_attempt_at")
 )
 
+owned_invoices = Table(
+    "owned_invoices",
+    metadata,
+    Column("tag", String(80), primary_key=True),
+    Column("provider_invoice_id", String(32), unique=True),
+    Column("source", String(16), nullable=False),
+    Column(
+        "draft_id",
+        String(36),
+        ForeignKey("invoice_drafts.id", ondelete="CASCADE"),
+        unique=True,
+    ),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint("source IN ('trial', 'smoke')", name="source"),
+)
+owned_invoices.append_constraint(
+    Index("ix_owned_invoices_provider_invoice_id", "provider_invoice_id")
+)
+
 webhook_events = Table(
     "webhook_events",
     metadata,

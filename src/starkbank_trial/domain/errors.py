@@ -38,6 +38,15 @@ class MissingProviderConfigurationError(TrialError):
         return f"missing provider configuration: {', '.join(self.missing_fields)}"
 
 
+@dataclass(frozen=True, slots=True)
+class InvoiceOwnershipConflictError(TrialError):
+    tag: str
+    provider_invoice_id: str
+
+    def __str__(self) -> str:
+        return f"invoice ownership conflict for tag {self.tag}: {self.provider_invoice_id}"
+
+
 @dataclass(slots=True)
 class LiveOperationsDisabledError(TrialError):
     operation: str

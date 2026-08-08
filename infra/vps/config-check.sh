@@ -26,6 +26,11 @@ require_setting() {
 require_setting APP_IMAGE "$APP_IMAGE"
 require_setting PUBLIC_HOST "$PUBLIC_HOST"
 require_setting PUBLIC_BASE_URL "$PUBLIC_BASE_URL"
+require_setting COMPOSE_PROJECT_NAME "$COMPOSE_PROJECT_NAME"
+case "$COMPOSE_PROJECT_NAME" in
+    starkbank-trial-vps) ;;
+    *) fail "COMPOSE_PROJECT_NAME must be starkbank-trial-vps" ;;
+esac
 require_setting POSTGRES_DB "$POSTGRES_DB"
 require_setting POSTGRES_USER "$POSTGRES_USER"
 workspace_id=$(config_value "$VPS_ENV_FILE" STARKBANK_WORKSPACE_ID)

@@ -4,6 +4,7 @@ x-app: &app
     - path: /etc/starkbank-trial/secrets/current/runtime.env
       required: true
   environment:
+    COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:?set COMPOSE_PROJECT_NAME}
     STARKBANK_ENVIRONMENT: sandbox
     STARKBANK_PRIVATE_KEY_FILE: /run/secrets/starkbank_private_key
     PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}

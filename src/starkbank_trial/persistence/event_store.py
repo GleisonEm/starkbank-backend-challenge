@@ -13,10 +13,15 @@ from starkbank_trial.domain.events import (
     IgnoredEvent,
     TransferLifecycleEvent,
 )
-from starkbank_trial.domain.status import TransferStatus
+from starkbank_trial.domain.status import DraftStatus, TransferStatus
 from starkbank_trial.domain.transfer import build_transfer_command
 from starkbank_trial.domain.types import Cents, EventId
-from starkbank_trial.persistence.schema import invoice_drafts, transfer_jobs, webhook_events
+from starkbank_trial.persistence.schema import (
+    invoice_drafts,
+    owned_invoices,
+    transfer_jobs,
+    webhook_events,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,10 +34,10 @@ class EventStore:
                 return self._record_transfer_event(connection, record, record.event)
             outcome = self._initial_outcome(record)
             if not self._insert_event(connection, record, outcome):
-                return EventWriteResult.DUPLICATE_EVENT
+                return self._recover_duplicate(connection, record)
             if isinstance(record.event, IgnoredEvent) or record.net_amount is None:
                 return outcome
-            if not self._owns_invoice(connection, record.event.invoice_id):
+            if not self._owns_invoice(connection, record.event, record.received_at):
                 return self._mark_invoice_unknown(connection, record.event.event_id)
             return self._queue_transfer(
                 connection,
@@ -162,6 +167,30 @@ class EventStore:
             connection.execute(select(func.pg_notify("transfer_jobs", str(event.invoice_id))))
         return EventWriteResult.QUEUED
 
+    def _recover_duplicate(self, connection: Connection, record: EventRecord) -> EventWriteResult:
+        event = record.event
+        if not isinstance(event, CreditedInvoiceEvent) or record.net_amount is None:
+            return EventWriteResult.DUPLICATE_EVENT
+        stored = connection.execute(
+            select(webhook_events.c.payload_hash, webhook_events.c.outcome).where(
+                webhook_events.c.id == event.event_id
+            )
+        ).first()
+        if stored is None:
+            return EventWriteResult.DUPLICATE_EVENT
+        if stored[0] != record.payload_hash or stored[1] != EventWriteResult.INVOICE_UNKNOWN:
+            return EventWriteResult.DUPLICATE_EVENT
+        if not self._owns_invoice(connection, event, record.received_at):
+            return EventWriteResult.DUPLICATE_EVENT
+        outcome = self._queue_transfer(connection, event, record.net_amount, record.received_at)
+        if outcome is EventWriteResult.QUEUED:
+            connection.execute(
+                update(webhook_events)
+                .where(webhook_events.c.id == event.event_id)
+                .values(outcome=EventWriteResult.QUEUED)
+            )
+        return outcome
+
     @staticmethod
     def _mark_duplicate(connection: Connection, event_id: EventId) -> EventWriteResult:
         connection.execute(
@@ -172,15 +201,72 @@ class EventStore:
         return EventWriteResult.DUPLICATE_INVOICE
 
     @staticmethod
-    def _owns_invoice(connection: Connection, invoice_id: str) -> bool:
-        return (
+    def _owns_invoice(
+        connection: Connection,
+        event: CreditedInvoiceEvent,
+        received_at: datetime,
+    ) -> bool:
+        owner = (
             connection.execute(
-                select(invoice_drafts.c.id).where(
-                    invoice_drafts.c.provider_invoice_id == invoice_id
+                select(owned_invoices).where(
+                    owned_invoices.c.provider_invoice_id == event.invoice_id
                 )
-            ).first()
-            is not None
+            )
+            .mappings()
+            .first()
         )
+        if owner is None:
+            tags = tuple(dict.fromkeys(event.tags))
+            if not tags:
+                return False
+            matches = list(
+                connection.execute(
+                    select(owned_invoices).where(owned_invoices.c.tag.in_(tags)).limit(2)
+                ).mappings()
+            )
+            if len(matches) != 1:
+                return False
+            owner = matches[0]
+            current_provider_id = owner["provider_invoice_id"]
+            if current_provider_id is not None and current_provider_id != event.invoice_id:
+                return False
+            try:
+                with connection.begin_nested():
+                    connection.execute(
+                        update(owned_invoices)
+                        .where(
+                            owned_invoices.c.tag == owner["tag"],
+                            owned_invoices.c.provider_invoice_id.is_(None),
+                        )
+                        .values(
+                            provider_invoice_id=event.invoice_id,
+                            updated_at=received_at,
+                        )
+                    )
+            except IntegrityError:
+                return False
+        elif event.tags:
+            tag_matches = connection.execute(
+                select(owned_invoices.c.tag).where(owned_invoices.c.tag.in_(event.tags))
+            ).all()
+            if any(row[0] != owner["tag"] for row in tag_matches):
+                return False
+        draft_id = owner["draft_id"]
+        if draft_id is not None:
+            connection.execute(
+                update(invoice_drafts)
+                .where(
+                    invoice_drafts.c.id == draft_id,
+                    invoice_drafts.c.provider_invoice_id.is_(None)
+                    | (invoice_drafts.c.provider_invoice_id == event.invoice_id),
+                )
+                .values(
+                    provider_invoice_id=event.invoice_id,
+                    status=DraftStatus.CREATED,
+                    updated_at=received_at,
+                )
+            )
+        return True
 
     @staticmethod
     def _mark_invoice_unknown(connection: Connection, event_id: EventId) -> EventWriteResult:

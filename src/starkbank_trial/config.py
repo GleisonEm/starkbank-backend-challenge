@@ -44,6 +44,7 @@ class Settings(BaseSettings):
         default="sqlite+pysqlite:///starkbank_trial.db",
         alias="DATABASE_URL",
     )
+    compose_project_name: str | None = Field(default=None, alias="COMPOSE_PROJECT_NAME")
     starkbank_environment: Literal["sandbox"] = Field(
         default="sandbox", alias="STARKBANK_ENVIRONMENT"
     )
@@ -122,3 +123,8 @@ class Settings(BaseSettings):
         if public_base_url is None:
             raise MissingProviderConfigurationError(missing_fields=("PUBLIC_BASE_URL",))
         return WebhookConfig(public_base_url=public_base_url)
+
+    def smoke_namespace(self) -> str:
+        if self.compose_project_name is None:
+            raise MissingProviderConfigurationError(missing_fields=("COMPOSE_PROJECT_NAME",))
+        return self.compose_project_name

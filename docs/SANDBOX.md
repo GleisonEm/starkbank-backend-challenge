@@ -60,8 +60,9 @@ created.
 ## Clean up after local experiments
 
 Stark Bank retries failed webhook deliveries. If a local test created invoices or transfers in
-a workspace that another environment also uses, you can remove the notification events of that
-test window from the provider — this prevents a stopped environment from receiving them late.
+a workspace that another environment also uses, you can remove notification events from the
+provider as best-effort history maintenance. This does not isolate environments and does not
+cancel retries that are already scheduled.
 
 ```bash
 make webhook-list
@@ -70,12 +71,12 @@ docker compose --env-file .env -f compose.yaml -p starkbank-trial-local run --rm
     --after "2026-08-07T10:00:00+00:00" --confirm-sandbox
 ```
 
-`cleanup-events` deletes the notification events created inside the `--after` (required)
-to `--before` (optional, default: now) window and reports the deleted and failed ids as
-machine-readable JSON. It only touches the workspace of the configured credentials, requires
-`STARKBANK_SANDBOX_LIVE_ENABLED=true` and `--confirm-sandbox`, and never deletes invoices or
-transfers — it only removes undelivered event notifications so they are not retried later.
-This is a maintenance command; the challenge flow does not need it.
+`cleanup-events` deletes the notification events returned for the `--after` (required) to
+`--before` (optional, default: now) window and reports the deleted and failed ids as
+machine-readable JSON, including `retry_cancellation_guaranteed: false`. It only touches the
+workspace of the configured credentials, requires `STARKBANK_SANDBOX_LIVE_ENABLED=true` and
+`--confirm-sandbox`, and never deletes invoices or transfers. This is a maintenance command,
+not an isolation or concurrency mechanism; the challenge flow does not need it.
 
 ## Smoke Invoice
 

@@ -33,8 +33,14 @@ def build_invoice_drafts(batch: InvoiceBatch, created_at: datetime) -> tuple[Inv
     )
 
 
-def build_smoke_invoice(reference: str, amount: int, created_at: datetime) -> InvoiceDraft:
-    draft_id = uuid5(NAMESPACE_URL, f"starkbank-trial:smoke:{reference}")
+def build_smoke_invoice(
+    reference: str,
+    amount: int,
+    created_at: datetime,
+    *,
+    namespace: str = "starkbank-trial-local",
+) -> InvoiceDraft:
+    draft_id = uuid5(NAMESPACE_URL, f"starkbank-trial:smoke:{namespace}:{reference}")
     seed = int.from_bytes(sha256(str(draft_id).encode()).digest()[:8])
     fake = Faker("pt_BR", use_weighting=False)
     fake.seed_instance(seed)

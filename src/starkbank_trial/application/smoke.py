@@ -17,17 +17,26 @@ class SmokeBatchResult:
 class SmokeBatchService:
     provider: InvoiceProvider
     clock: Clock
-    invoice_store: InvoiceStore | None = None
+    invoice_store: InvoiceStore
+    namespace: str
 
     def run(self, reference: str, count: int, amount: int) -> SmokeBatchResult:
         invoices: list[ProviderInvoice] = []
         reused = 0
         for ordinal in range(count):
-            draft = build_smoke_invoice(f"{reference}:{ordinal}", amount, self.clock.now())
+            now = self.clock.now()
+            draft = build_smoke_invoice(
+                f"{reference}:{ordinal}",
+                amount,
+                now,
+                namespace=self.namespace,
+            )
+            self.invoice_store.register_smoke(draft, now)
             existing = self.provider.find_invoice(draft.tag)
             if existing is not None:
                 invoices.append(existing)
                 reused += 1
+                self.invoice_store.record_smoke(draft, str(existing.id), now)
                 continue
             try:
                 created = self.provider.create_invoice(draft)
@@ -37,6 +46,5 @@ class SmokeBatchService:
                     raise
                 created = reconciled
             invoices.append(created)
-            if self.invoice_store is not None:
-                self.invoice_store.record_smoke(draft, str(created.id), self.clock.now())
+            self.invoice_store.record_smoke(draft, str(created.id), self.clock.now())
         return SmokeBatchResult(tuple(invoices), reused)

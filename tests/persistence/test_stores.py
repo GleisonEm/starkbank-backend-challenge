@@ -16,7 +16,12 @@ from starkbank_trial.domain.events import (
 from starkbank_trial.domain.jobs import JobClaim
 from starkbank_trial.domain.trials import BatchClaim, NewTrial
 from starkbank_trial.domain.types import Cents, EventId, ExternalId, InvoiceId, TransferId
-from starkbank_trial.persistence.schema import metadata, transfer_jobs, webhook_events
+from starkbank_trial.persistence.schema import (
+    metadata,
+    owned_invoices,
+    transfer_jobs,
+    webhook_events,
+)
 from starkbank_trial.persistence.stores import Stores, build_stores
 
 
@@ -163,10 +168,70 @@ def test_event_store_queues_credit_for_invoice_created_by_this_environment(
     outcome = stores.events.record(EventRecord(owned, "o" * 64, received_at, Cents(9_950)))
 
     # Then
-    assert outcome is EventWriteResult.QUEUED
+    assert outcome == EventWriteResult.QUEUED
     with stores.transfers.engine.connect() as connection:
         job = connection.execute(select(func.count()).select_from(transfer_jobs)).scalar_one()
     assert job == 1
+
+
+def test_event_store_uses_owned_tag_before_provider_id_is_persisted(stores: Stores) -> None:
+    received_at = datetime(2026, 8, 1, 12, tzinfo=UTC)
+    draft = build_smoke_invoice("race", 10_000, received_at, namespace="local")
+    stores.invoices.register_smoke(draft, received_at)
+    event = CreditedInvoiceEvent(
+        event_id=EventId("event-race"),
+        invoice_id=InvoiceId("invoice-race"),
+        amount=Cents(10_000),
+        fee=Cents(50),
+        workspace_id="workspace-1",
+        tags=(draft.tag,),
+    )
+
+    # When
+    outcome = stores.events.record(EventRecord(event, "r" * 64, received_at, Cents(9_950)))
+
+    # Then
+    assert outcome is EventWriteResult.QUEUED
+    with stores.invoices.engine.connect() as connection:
+        owner = connection.execute(
+            select(owned_invoices.c.provider_invoice_id).where(owned_invoices.c.tag == draft.tag)
+        ).scalar_one()
+        jobs = connection.execute(select(func.count()).select_from(transfer_jobs)).scalar_one()
+    assert owner == "invoice-race"
+    assert jobs == 1
+
+
+def test_event_store_promotes_unknown_event_after_intent_is_registered(stores: Stores) -> None:
+    # Given
+    received_at = datetime(2026, 8, 1, 12, tzinfo=UTC)
+    draft = build_smoke_invoice("late-registration", 10_000, received_at, namespace="local")
+    event = CreditedInvoiceEvent(
+        event_id=EventId("event-late-registration"),
+        invoice_id=InvoiceId("invoice-late-registration"),
+        amount=Cents(10_000),
+        fee=Cents(50),
+        workspace_id="workspace-1",
+        tags=(draft.tag,),
+    )
+    record = EventRecord(event, "l" * 64, received_at, Cents(9_950))
+
+    # When
+    first = stores.events.record(record)
+    stores.invoices.register_smoke(draft, received_at)
+    replay = stores.events.record(record)
+    second_replay = stores.events.record(record)
+
+    # Then
+    assert first is EventWriteResult.INVOICE_UNKNOWN
+    assert replay is EventWriteResult.QUEUED
+    assert second_replay is EventWriteResult.DUPLICATE_EVENT
+    with stores.invoices.engine.connect() as connection:
+        jobs = connection.execute(select(func.count()).select_from(transfer_jobs)).scalar_one()
+        outcome = connection.execute(
+            select(webhook_events.c.outcome).where(webhook_events.c.id == record.event.event_id)
+        ).scalar_one()
+    assert jobs == 1
+    assert outcome == EventWriteResult.QUEUED
 
 
 def test_event_store_applies_new_transfer_status_and_ignores_stale_event(stores: Stores) -> None:

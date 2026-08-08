@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, NoReturn, cast
-from uuid import NAMESPACE_URL, uuid5
 
 import structlog
 import typer
@@ -12,14 +11,22 @@ from alembic import command
 from alembic.config import Config
 
 from starkbank_trial.application.clock import SystemClock
-from starkbank_trial.application.payers import build_smoke_invoice
 from starkbank_trial.application.smoke import SmokeBatchService
 from starkbank_trial.application.transfers import should_poll
 from starkbank_trial.bootstrap import Services, build_client, build_services
 from starkbank_trial.config import Settings
 from starkbank_trial.domain.constants import WEBHOOK_SUBSCRIPTIONS
-from starkbank_trial.domain.errors import LiveOperationsDisabledError
-from starkbank_trial.domain.provider import ProviderError
+from starkbank_trial.domain.errors import (
+    LiveOperationsDisabledError,
+    MissingProviderConfigurationError,
+)
+from starkbank_trial.domain.provider import (
+    ProviderError,
+    ProviderPermanentError,
+    ProviderTimeoutError,
+    ProviderTransientError,
+    ProviderUnknownOutcomeError,
+)
 from starkbank_trial.domain.transfer import build_transfer_command
 from starkbank_trial.logging import configure_logging
 from starkbank_trial.persistence.engine import build_engine
@@ -64,12 +71,33 @@ def _write_result(result: StrEnum | dict[str, object]) -> None:
 def _exit_provider_error(error: ProviderError | LiveOperationsDisabledError) -> NoReturn:
     typer.echo(
         json.dumps(
-            {"error": "provider_operation_failed", "operation": error.operation},
+            {
+                "error": "provider_operation_failed",
+                "kind": provider_error_kind(error),
+                "operation": error.operation,
+            },
             sort_keys=True,
         ),
         err=True,
     )
     raise typer.Exit(code=1)
+
+
+def provider_error_kind(error: ProviderError | LiveOperationsDisabledError) -> str:
+    match error:
+        case LiveOperationsDisabledError():
+            kind = "live_operations_disabled"
+        case ProviderUnknownOutcomeError():
+            kind = "unknown_outcome"
+        case ProviderTimeoutError():
+            kind = "timeout"
+        case ProviderTransientError():
+            kind = "transient"
+        case ProviderPermanentError():
+            kind = "permanent"
+        case ProviderError():
+            kind = "provider"
+    return kind
 
 
 @db_app.command("upgrade")
@@ -269,6 +297,7 @@ def provider_cleanup_events(
         {
             "deleted": deleted,
             "failed": failed,
+            "retry_cancellation_guaranteed": False,
             "window": {
                 "after": after_dt.isoformat(),
                 "before": before_dt.isoformat() if before_dt is not None else None,
@@ -290,22 +319,27 @@ def provider_smoke_invoice(
             "live Sandbox calls require STARKBANK_SANDBOX_LIVE_ENABLED=true and --confirm-sandbox"
         )
         raise typer.BadParameter(message)
-    client = build_client(settings)
-    stores = _invoice_store()
-    stable_reference = str(uuid5(NAMESPACE_URL, reference))
-    draft = build_smoke_invoice(stable_reference, amount_cents, datetime.now(UTC))
     try:
-        existing = client.find_invoice(draft.tag)
-        invoice = existing if existing is not None else client.create_invoice(draft)
+        namespace = settings.smoke_namespace()
+    except MissingProviderConfigurationError as error:
+        raise typer.BadParameter(str(error)) from error
+    client = build_client(settings)
+    try:
+        result = SmokeBatchService(
+            client,
+            SystemClock(),
+            _invoice_store(),
+            namespace,
+        ).run(reference, 1, amount_cents)
     except (ProviderError, LiveOperationsDisabledError) as error:
         _exit_provider_error(error)
-    stores.record_smoke(draft, str(invoice.id), datetime.now(UTC))
+    invoice = result.invoices[0]
     typer.echo(
         json.dumps(
             {
                 "invoice_id": invoice.id,
                 "tag": invoice.tag,
-                "reused": existing is not None,
+                "reused": result.reused == 1,
             },
             sort_keys=True,
         )
@@ -323,12 +357,17 @@ def provider_smoke_batch(
     settings = Settings()
     if not settings.starkbank_sandbox_live_enabled or not confirm_sandbox:
         raise typer.BadParameter(SANDBOX_CONFIRMATION_ERROR)
+    try:
+        namespace = settings.smoke_namespace()
+    except MissingProviderConfigurationError as error:
+        raise typer.BadParameter(str(error)) from error
     client = build_client(settings)
     try:
         result = SmokeBatchService(
             client,
             SystemClock(),
-            invoice_store=_invoice_store(),
+            _invoice_store(),
+            namespace,
         ).run(reference, count, amount_cents)
     except (ProviderError, LiveOperationsDisabledError) as error:
         _exit_provider_error(error)

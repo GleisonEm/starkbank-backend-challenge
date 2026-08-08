@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Final, cast
 
-from sqlalchemy import Engine, and_, func, or_, select
+from sqlalchemy import Engine, and_, false, func, or_, select
 from sqlalchemy.engine import Connection, RowMapping
 from sqlalchemy.sql import ColumnElement, Select
 
@@ -106,13 +106,25 @@ class ReviewStore:
             trial = self._trial_row(connection, trial_id)
             trial_key = str(trial["id"]) if trial is not None else None
             report = self._counts(connection, trial_key)
-            totals = connection.execute(
+            totals_statement = (
                 select(
                     func.coalesce(func.sum(transfer_jobs.c.amount), 0),
                     func.coalesce(func.sum(transfer_jobs.c.fee), 0),
                     func.coalesce(func.sum(transfer_jobs.c.net_amount), 0),
-                ).where(transfer_jobs.c.status.in_(("succeeded", "permanent_failure")))
-            ).one()
+                )
+                .select_from(
+                    transfer_jobs.join(
+                        invoice_drafts,
+                        invoice_drafts.c.provider_invoice_id == transfer_jobs.c.invoice_id,
+                    ).join(invoice_batches, invoice_batches.c.id == invoice_drafts.c.batch_id)
+                )
+                .where(transfer_jobs.c.status.in_(("succeeded", "permanent_failure")))
+            )
+            if trial_key is None:
+                totals_statement = totals_statement.where(false())
+            else:
+                totals_statement = totals_statement.where(invoice_batches.c.run_id == trial_key)
+            totals = connection.execute(totals_statement).one()
         return {
             "generated_at": _iso(datetime.now(UTC)),
             "trial": self._trial_payload(trial) if trial is not None else None,
@@ -131,8 +143,8 @@ class ReviewStore:
         }
 
     def trials(self, query: ReviewQuery) -> ReviewPage:
-        statement = select(trial_runs)
-        count = select(func.count()).select_from(trial_runs)
+        statement = select(trial_runs).where(trial_runs.c.id != SMOKE_RUN_ID)
+        count = select(func.count()).select_from(trial_runs).where(trial_runs.c.id != SMOKE_RUN_ID)
         conditions: list[Any] = []
         if query.trial_id is not None:
             conditions.append(trial_runs.c.id == query.trial_id)
@@ -155,7 +167,11 @@ class ReviewStore:
     def trial(self, trial_id: str) -> JsonObject | None:
         with self.engine.connect() as connection:
             row = (
-                connection.execute(select(trial_runs).where(trial_runs.c.id == trial_id))
+                connection.execute(
+                    select(trial_runs).where(
+                        trial_runs.c.id == trial_id, trial_runs.c.id != SMOKE_RUN_ID
+                    )
+                )
                 .mappings()
                 .first()
             )
@@ -165,7 +181,12 @@ class ReviewStore:
         statement = select(invoice_batches, trial_runs.c.status.label("trial_status")).join(
             trial_runs, trial_runs.c.id == invoice_batches.c.run_id
         )
-        count = select(func.count()).select_from(invoice_batches)
+        count = (
+            select(func.count())
+            .select_from(invoice_batches)
+            .where(invoice_batches.c.run_id != SMOKE_RUN_ID)
+        )
+        statement = statement.where(invoice_batches.c.run_id != SMOKE_RUN_ID)
         if query.trial_id is not None:
             statement = statement.where(invoice_batches.c.run_id == query.trial_id)
             count = count.where(invoice_batches.c.run_id == query.trial_id)
@@ -198,7 +219,10 @@ class ReviewStore:
                 connection.execute(
                     select(invoice_batches, trial_runs.c.status.label("trial_status"))
                     .join(trial_runs, trial_runs.c.id == invoice_batches.c.run_id)
-                    .where(invoice_batches.c.id == batch_id)
+                    .where(
+                        invoice_batches.c.id == batch_id,
+                        invoice_batches.c.run_id != SMOKE_RUN_ID,
+                    )
                 )
                 .mappings()
                 .first()
@@ -221,7 +245,9 @@ class ReviewStore:
             select(func.count())
             .select_from(invoice_drafts)
             .join(invoice_batches, invoice_batches.c.id == invoice_drafts.c.batch_id)
+            .where(invoice_batches.c.run_id != SMOKE_RUN_ID)
         )
+        statement = statement.where(invoice_batches.c.run_id != SMOKE_RUN_ID)
         statement, count = self._invoice_filters(statement, count, query)
         statement = statement.order_by(
             invoice_drafts.c.created_at.desc(), invoice_drafts.c.id.desc()
@@ -249,7 +275,10 @@ class ReviewStore:
                         .label("credited_at"),
                     )
                     .join(invoice_batches, invoice_batches.c.id == invoice_drafts.c.batch_id)
-                    .where(invoice_drafts.c.id == draft_id)
+                    .where(
+                        invoice_drafts.c.id == draft_id,
+                        invoice_batches.c.run_id != SMOKE_RUN_ID,
+                    )
                 )
                 .mappings()
                 .first()
@@ -407,6 +436,9 @@ class ReviewStore:
 
     @staticmethod
     def _counts(connection: Connection, trial_id: str | None) -> JsonObject:
+        if trial_id is None:
+            return {"batches": {}, "invoices": {}, "webhook_events": {}, "transfers": {}}
+
         def grouped(
             table: Any,  # noqa: ANN401
             column: ColumnElement[Any],
@@ -419,16 +451,48 @@ class ReviewStore:
                 statement = statement.where(where)
             return {str(row[0]): int(row[1]) for row in connection.execute(statement)}
 
-        batch_where = invoice_batches.c.run_id == trial_id if trial_id else None
-        invoice_where = invoice_batches.c.run_id == trial_id if trial_id else None
+        batch_where = invoice_batches.c.run_id == trial_id
+        invoice_where = invoice_batches.c.run_id == trial_id
         invoice_from = invoice_drafts.join(
             invoice_batches, invoice_drafts.c.batch_id == invoice_batches.c.id
         )
+        trial_invoice_ids = (
+            select(invoice_drafts.c.provider_invoice_id)
+            .select_from(
+                invoice_drafts.join(
+                    invoice_batches, invoice_drafts.c.batch_id == invoice_batches.c.id
+                )
+            )
+            .where(
+                invoice_batches.c.run_id == trial_id,
+                invoice_drafts.c.provider_invoice_id.is_not(None),
+            )
+        )
+        trial_transfer_ids = (
+            select(transfer_jobs.c.provider_transfer_id)
+            .select_from(
+                transfer_jobs.join(
+                    invoice_drafts,
+                    invoice_drafts.c.provider_invoice_id == transfer_jobs.c.invoice_id,
+                ).join(invoice_batches, invoice_batches.c.id == invoice_drafts.c.batch_id)
+            )
+            .where(
+                invoice_batches.c.run_id == trial_id,
+                transfer_jobs.c.provider_transfer_id.is_not(None),
+            )
+        )
+        event_where = or_(
+            webhook_events.c.invoice_id.in_(trial_invoice_ids),
+            webhook_events.c.transfer_id.in_(trial_transfer_ids),
+        )
+        transfer_from = transfer_jobs.join(
+            invoice_drafts, invoice_drafts.c.provider_invoice_id == transfer_jobs.c.invoice_id
+        ).join(invoice_batches, invoice_batches.c.id == invoice_drafts.c.batch_id)
         return {
             "batches": grouped(invoice_batches, invoice_batches.c.status, batch_where),
             "invoices": grouped(invoice_from, invoice_drafts.c.status, invoice_where),
-            "webhook_events": grouped(webhook_events, webhook_events.c.outcome),
-            "transfers": grouped(transfer_jobs, transfer_jobs.c.status),
+            "webhook_events": grouped(webhook_events, webhook_events.c.outcome, event_where),
+            "transfers": grouped(transfer_from, transfer_jobs.c.status, batch_where),
         }
 
     @staticmethod

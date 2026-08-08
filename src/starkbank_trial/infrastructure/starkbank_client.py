@@ -90,6 +90,7 @@ class _SdkCreditedInvoice(BaseModel):
     id: str
     amount: int
     fee: int
+    tags: tuple[str, ...] = ()
 
 
 class _SdkWebhook(BaseModel):
@@ -234,6 +235,7 @@ class StarkBankClient:
             amount=Cents(invoice.amount),
             fee=Cents(invoice.fee),
             workspace_id=event.workspace_id,
+            tags=invoice.tags,
         )
 
     def ensure_webhook(self, url: str) -> ProviderWebhook:

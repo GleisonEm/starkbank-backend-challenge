@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from alembic import command as alembic_command
 from alembic.config import Config as AlembicConfig
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 from typer.testing import CliRunner
 
 import starkbank_trial.cli as cli_module
@@ -23,6 +23,7 @@ from starkbank_trial.domain.models import TransferCommand
 from starkbank_trial.domain.provider import (
     ProviderPermanentError,
     ProviderTransfer,
+    ProviderUnknownOutcomeError,
     ProviderWebhook,
     WebhookInspection,
 )
@@ -312,8 +313,23 @@ def test_provider_failure_emits_sanitized_machine_readable_error(
     assert result.exit_code == 1
     assert json.loads(result.stderr) == {
         "error": "provider_operation_failed",
+        "kind": "permanent",
         "operation": "list_webhooks",
     }
+
+
+@pytest.mark.parametrize(
+    ("error", "kind"),
+    [
+        (ProviderUnknownOutcomeError(operation="create_invoice"), "unknown_outcome"),
+        (ProviderPermanentError(operation="create_invoice"), "permanent"),
+    ],
+)
+def test_provider_failure_kind_is_sanitized(
+    error: ProviderPermanentError | ProviderUnknownOutcomeError,
+    kind: str,
+) -> None:
+    assert cli_module.provider_error_kind(error) == kind
 
 
 def test_provider_smoke_invoice_requires_explicit_live_opt_in(
@@ -339,6 +355,7 @@ def test_provider_smoke_invoice_creates_deterministic_safe_invoice(
     # Given
     gateway = FakeGateway()
     monkeypatch.setenv("STARKBANK_SANDBOX_LIVE_ENABLED", "true")
+    monkeypatch.setenv("COMPOSE_PROJECT_NAME", "starkbank-trial-local")
 
     def fixed_client(settings: Settings) -> FakeGateway:
         return gateway
@@ -417,6 +434,7 @@ def test_provider_cleanup_events_deletes_events_in_window(
     assert json.loads(result.stdout) == {
         "deleted": ["event-0", "event-1", "event-2"],
         "failed": [],
+        "retry_cancellation_guaranteed": False,
         "window": {"after": "2026-08-07T08:00:00+00:00", "before": None},
     }
 
@@ -470,6 +488,7 @@ def test_provider_cleanup_events_reports_partial_failures(
     assert json.loads(result.stdout) == {
         "deleted": ["event-0", "event-2"],
         "failed": ["event-1"],
+        "retry_cancellation_guaranteed": False,
         "window": {
             "after": "2026-08-07T08:00:00+00:00",
             "before": "2026-08-07T09:00:00+00:00",
@@ -548,6 +567,7 @@ def test_provider_cleanup_events_list_failure_is_sanitized(
     assert result.exit_code == 1
     assert json.loads(result.stderr) == {
         "error": "provider_operation_failed",
+        "kind": "permanent",
         "operation": "list_events",
     }
 
@@ -568,6 +588,7 @@ def test_db_upgrade_command_applies_migrations(
     assert result.exit_code == 0
     engine = create_engine(database_url)
     assert "transfer_jobs" in inspect(engine).get_table_names()
+    assert "owned_invoices" in inspect(engine).get_table_names()
     engine.dispose()
 
 
@@ -591,6 +612,94 @@ def test_direct_alembic_upgrade_reads_project_env_file(
     # Then
     engine = create_engine(database_url)
     assert "transfer_jobs" in inspect(engine).get_table_names()
+    assert "owned_invoices" in inspect(engine).get_table_names()
+    engine.dispose()
+
+
+def test_owned_invoice_migration_backfills_trial_and_legacy_smoke(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "backfill.db"
+    database_url = f"sqlite+pysqlite:///{database}"
+    repository = Path(__file__).parents[1]
+    config = AlembicConfig(str(repository / "alembic.ini"))
+    config.set_main_option("script_location", str(repository / "migrations"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    alembic_command.upgrade(config, "0003_transfer_lifecycle")
+    now = "2026-08-08 12:00:00"
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO trial_runs "
+                "(id, status, started_at, ends_at, created_at, completed_at, active_marker) "
+                "VALUES (:id, 'running', :now, :now, :now, NULL, NULL)"
+            ),
+            {"id": "trial-run-000000000000000000000000000000", "now": now},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO trial_runs "
+                "(id, status, started_at, ends_at, created_at, completed_at, active_marker) "
+                "VALUES (:id, 'completed', :now, :now, :now, :now, NULL)"
+            ),
+            {"id": "smoke-run-0000000000000000000000000000", "now": now},
+        )
+        for batch_id, run_id in (
+            ("trial-batch-000000000000000000000000000", "trial-run-000000000000000000000000000000"),
+            ("sandbox-smoke", "smoke-run-0000000000000000000000000000"),
+        ):
+            connection.execute(
+                text(
+                    "INSERT INTO invoice_batches "
+                    "(id, run_id, slot_index, scheduled_at, target_count, status, attempts, "
+                    "created_at, completed_at) VALUES (:id, :run_id, 0, :now, 8, 'completed', "
+                    "0, :now, :now)"
+                ),
+                {"id": batch_id, "run_id": run_id, "now": now},
+            )
+        for draft_id, batch_id, tag, provider_id in (
+            (
+                "trial-draft-000000000000000000000000000",
+                "trial-batch-000000000000000000000000000",
+                "trial-tag",
+                "invoice-trial",
+            ),
+            (
+                "smoke-draft-000000000000000000000000000",
+                "sandbox-smoke",
+                "smoke-tag",
+                "invoice-smoke",
+            ),
+        ):
+            connection.execute(
+                text(
+                    "INSERT INTO invoice_drafts "
+                    "(id, batch_id, ordinal, payer_name, payer_tax_id, amount, tag, status, "
+                    "provider_invoice_id, attempts, reconcile_attempts, last_error_code, "
+                    "created_at, updated_at, next_attempt_at) VALUES "
+                    "(:id, :batch_id, 0, 'Payer', '123', 100, :tag, 'created', :provider_id, "
+                    "0, 0, NULL, :now, :now, :now)"
+                ),
+                {
+                    "id": draft_id,
+                    "batch_id": batch_id,
+                    "tag": tag,
+                    "provider_id": provider_id,
+                    "now": now,
+                },
+            )
+    alembic_command.upgrade(config, "head")
+    with engine.connect() as connection:
+        rows = connection.execute(
+            text(
+                "SELECT tag, provider_invoice_id, source, draft_id FROM owned_invoices ORDER BY tag"
+            )
+        ).all()
+    assert rows == [
+        ("smoke-tag", "invoice-smoke", "smoke", "smoke-draft-000000000000000000000000000"),
+        ("trial-tag", "invoice-trial", "trial", "trial-draft-000000000000000000000000000"),
+    ]
     engine.dispose()
 
 
