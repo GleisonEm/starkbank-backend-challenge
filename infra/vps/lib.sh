@@ -22,6 +22,7 @@ require_file() {
 
 load_vps_env() {
     require_file "$VPS_ENV_FILE"
+    COMPOSE_PROJECT_NAME=$(config_value "$VPS_ENV_FILE" COMPOSE_PROJECT_NAME)
     APP_IMAGE=$(config_value "$VPS_ENV_FILE" APP_IMAGE)
     PUBLIC_HOST=$(config_value "$VPS_ENV_FILE" PUBLIC_HOST)
     PUBLIC_BASE_URL=$(config_value "$VPS_ENV_FILE" PUBLIC_BASE_URL)
